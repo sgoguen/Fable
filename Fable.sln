@@ -56,6 +56,8 @@ Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Quicktest.Dart", "src\quick
 EndProject
 Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Fable.Tests.Dart", "tests\Dart\src\Fable.Tests.Dart.fsproj", "{40C7000A-6BC2-42B7-B7E2-3AAC60DAC06D}"
 EndProject
+Project("{F2A71F9B-5D33-465A-A702-920D77279786}") = "Fable.Expr.Utils", "src\Fable.Expr.Utils\Fable.Expr.Utils.fsproj", "{BC0142A3-102C-4ED7-99CD-1D689E1F672D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -142,6 +144,10 @@ Global
 		{40C7000A-6BC2-42B7-B7E2-3AAC60DAC06D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{40C7000A-6BC2-42B7-B7E2-3AAC60DAC06D}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{40C7000A-6BC2-42B7-B7E2-3AAC60DAC06D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BC0142A3-102C-4ED7-99CD-1D689E1F672D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BC0142A3-102C-4ED7-99CD-1D689E1F672D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BC0142A3-102C-4ED7-99CD-1D689E1F672D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BC0142A3-102C-4ED7-99CD-1D689E1F672D}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -168,6 +174,7 @@ Global
 		{505AEE8D-2BB6-48D1-ACD2-FB262DB365C4} = {C8CB96CF-68A8-4083-A0F8-319275CF8097}
 		{2971A69B-4A5B-4841-920F-38A5D11F7881} = {C8CB96CF-68A8-4083-A0F8-319275CF8097}
 		{40C7000A-6BC2-42B7-B7E2-3AAC60DAC06D} = {CF0A8EC3-841F-4A54-B9FC-8D174CCD4A90}
+		{BC0142A3-102C-4ED7-99CD-1D689E1F672D} = {C8CB96CF-68A8-4083-A0F8-319275CF8097}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {58DF9285-8523-4EAC-B598-BE5B02A76A00}

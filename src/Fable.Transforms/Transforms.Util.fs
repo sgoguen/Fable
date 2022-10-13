@@ -39,6 +39,7 @@ module Atts =
     let [<Literal>] pyDecorator = "Fable.Core.Py.DecoratorAttribute" // typeof<Fable.Core.Py.DecoratorAttribute>.FullName
     let [<Literal>] pyReflectedDecorator = "Fable.Core.Py.ReflectedDecoratorAttribute" // typeof<Fable.Core.Py.ReflectedDecoratorAttribute>.FullName
     let [<Literal>] dartIsConst = "Fable.Core.Dart.IsConstAttribute" // typeof<Fable.Core.Dart.IsConstAttribute>.FullName
+    let [<Literal>] csharpIsConst = "Fable.Core.CSharp.IsConstAttribute" // typeof<Fable.Core.CSharp.IsConstAttribute>.FullName
     let [<Literal>] rustByRef = "Fable.Core.Rust.ByRefAttribute"// typeof<Fable.Core.Rust.ByRefAttribute>.FullName
     let [<Literal>] rustOuterAttr = "Fable.Core.Rust.OuterAttrAttribute"// typeof<Fable.Core.Rust.OuterAttrAttribute>.FullName
     let [<Literal>] rustInnerAttr = "Fable.Core.Rust.InnerAttrAttribute"// typeof<Fable.Core.Rust.InnerAttrAttribute>.FullName
