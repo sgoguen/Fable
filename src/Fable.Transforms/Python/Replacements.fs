@@ -111,6 +111,9 @@ let makeRefFromMutableFunc com ctx r t (value: Expr) =
 
     Helper.LibCall(com, "types", "FSharpRef", t, [ getter; setter ], isConstructor = true)
 
+let makeEqOpStrict range left right op =
+    Operation(Binary(op, left, right), ["strict"], Boolean, range)
+
 let toChar (arg: Expr) =
     match arg.Type with
     | Char
@@ -351,18 +354,18 @@ let toSeq t (e: Expr) =
 
 let applyOp (com: ICompiler) (ctx: Context) r t opName (args: Expr list) =
     let unOp operator operand =
-        Operation(Unary(operator, operand), t, r)
+        Operation(Unary(operator, operand), Tags.empty, t, r)
 
     let binOp op left right =
-        Operation(Binary(op, left, right), t, r)
+        Operation(Binary(op, left, right), Tags.empty, t, r)
 
     let truncateUnsigned operation = // see #1550
         match t with
-        | Number (UInt32, _) -> Operation(Binary(BinaryShiftRightZeroFill, operation, makeIntConst 0), t, r)
+        | Number (UInt32, _) -> Operation(Binary(BinaryShiftRightZeroFill, operation, makeIntConst 0), Tags.empty, t, r)
         | _ -> operation
 
     let logicOp op left right =
-        Operation(Logical(op, left, right), Boolean, r)
+        Operation(Logical(op, left, right), Tags.empty, Boolean, r)
 
     let nativeOp opName argTypes args =
         match opName, args with
@@ -803,119 +806,8 @@ let rec defaultof (com: ICompiler) ctx r t =
     | _ -> Null t |> makeValue None
 
 let fableCoreLib (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr option) (args: Expr list) =
-    let fixDynamicImportPath =
-        function
-        | Value (StringConstant path, r) when path.EndsWith(".fs") ->
-            // In imports *.ts extensions have to be converted to *.py extensions instead
-            let fileExt = com.Options.FileExtension
-            Value(StringConstant(Path.ChangeExtension(path, fileExt)), r)
-        | path -> path
-
     match i.DeclaringEntityFullName, i.CompiledName with
-    | _, "op_ErasedCast" -> List.tryHead args
-    | _, ".ctor" -> typedObjExpr t [] |> Some
-    | _,
-      ("pyNative"
-      | "nativeOnly") ->
-        // TODO: Fail at compile time?
-        addWarning com ctx.InlinePath r $"{i.CompiledName} is being compiled without replacement, this will fail at runtime."
-
-        let runtimeMsg =
-            "A function supposed to be replaced by Python native code has been called, please check."
-            |> StringConstant
-            |> makeValue None
-
-        makeThrow r t (error runtimeMsg) |> Some
-    | _,
-      ("nameof"
-      | "nameof2" as meth) ->
-        match args with
-        | [ Nameof com ctx name as arg ] ->
-            if meth = "nameof2" then
-                makeTuple r true [ makeStrConst name; arg ] |> Some
-            else
-                makeStrConst name |> Some
-        | _ ->
-            "Cannot infer name of expression"
-            |> addError com ctx.InlinePath r
-
-            makeStrConst Naming.unknown |> Some
-    | _,
-      ("nameofLambda"
-      | "namesofLambda" as meth) ->
-        match args with
-        | [ Lambda (_, (Namesof com ctx names), _) ] -> Some names
-        | [ MaybeCasted (IdentExpr ident) ] ->
-            match tryFindInScope ctx ident.Name with
-            | Some (Lambda (_, (Namesof com ctx names), _)) -> Some names
-            | _ -> None
-        | _ -> None
-        |> Option.defaultWith (fun () ->
-            "Cannot infer name of expression"
-            |> addError com ctx.InlinePath r
-
-            [ Naming.unknown ])
-        |> fun names ->
-            if meth = "namesofLambda" then
-                List.map makeStrConst names
-                |> makeArray String
-                |> Some
-            else
-                List.tryHead names |> Option.map makeStrConst
-
-    | _,
-      ("casenameWithFieldCount"
-      | "casenameWithFieldIndex" as meth) ->
-        let rec inferCasename =
-            function
-            | Lambda (arg, IfThenElse (Test (IdentExpr arg2, UnionCaseTest tag, _), thenExpr, _, _), _) when arg.Name = arg2.Name ->
-                match arg.Type with
-                | DeclaredType (e, _) ->
-                    let e = com.GetEntity(e)
-
-                    if e.IsFSharpUnion then
-                        let c = e.UnionCases[tag]
-                        let caseName = defaultArg c.CompiledName c.Name
-
-                        if meth = "casenameWithFieldCount" then
-                            Some(caseName, c.UnionCaseFields.Length)
-                        else
-                            match thenExpr with
-                            | NestedRevLets (bindings, IdentExpr i) ->
-                                bindings
-                                |> List.tryPick (fun (i2, v) ->
-                                    match v with
-                                    | Get (_, UnionField unionInfo, _, _) when i.Name = i2.Name -> Some unionInfo.FieldIndex
-                                    | _ -> None)
-                                |> Option.map (fun fieldIdx -> caseName, fieldIdx)
-                            | _ -> None
-                    else
-                        None
-                | _ -> None
-            | _ -> None
-
-        match args with
-        | [ MaybeCasted (IdentExpr ident) ] ->
-            tryFindInScope ctx ident.Name
-            |> Option.bind inferCasename
-        | [ e ] -> inferCasename e
-        | _ -> None
-        |> Option.orElseWith (fun () ->
-            "Cannot infer case name of expression"
-            |> addError com ctx.InlinePath r
-
-            Some(Naming.unknown, -1))
-        |> Option.map (fun (s, i) -> makeTuple r false [ makeStrConst s; makeIntConst i ])
-
-    // Extensions
-    | _, "Async.AwaitPromise.Static" ->
-        Helper.LibCall(com, "async_", "awaitPromise", t, args, ?loc = r)
-        |> Some
-    | _, "Async.StartAsPromise.Static" ->
-        Helper.LibCall(com, "async_", "startAsPromise", t, args, ?loc = r)
-        |> Some
-    | _, "FormattableString.GetStrings" -> getFieldWith r t thisArg.Value "strs" |> Some
-
+    | _, UniversalFableCoreHelpers com ctx r t i args error expr -> Some expr
     | "Fable.Core.Testing.Assert", _ ->
         match i.CompiledName with
         | "AreEqual" ->
@@ -954,44 +846,6 @@ let fableCoreLib (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Exp
     | "Fable.Core.PyInterop", _
     | "Fable.Core.JsInterop", _ ->
         match i.CompiledName, args with
-        | "importDynamic", [ path ] ->
-            let path = fixDynamicImportPath path
-
-            Helper.GlobalCall("import", t, [ path ], ?loc = r)
-            |> Some
-        | "importValueDynamic", [ arg ] ->
-            let dynamicImport selector path =
-                let path = fixDynamicImportPath path
-                let import = Helper.GlobalCall("import", t, [ path ], ?loc = r)
-
-                match selector with
-                | StringConst "*" -> import
-                | selector ->
-                    let selector =
-                        let m = makeIdent "m"
-                        Delegate([ m ], Get(IdentExpr m, ExprGet selector, Any, None), None, Tags.empty)
-
-                    Helper.InstanceCall(import, "then", t, [ selector ])
-
-            let arg =
-                match arg with
-                | IdentExpr ident ->
-                    tryFindInScope ctx ident.Name
-                    |> Option.defaultValue arg
-                | arg -> arg
-
-            match arg with
-            // TODO: Check this is not a fable-library import?
-            | Import (info, _, _) ->
-                dynamicImport (makeStrConst info.Selector) (makeStrConst info.Path)
-                |> Some
-            | NestedLambda (args, Call (Import (importInfo, _, _), callInfo, _, _), None) when argEquals args callInfo.Args ->
-                dynamicImport (makeStrConst importInfo.Selector) (makeStrConst importInfo.Path)
-                |> Some
-            | _ ->
-                "The imported value is not coming from a different file"
-                |> addErrorAndReturnNull com ctx.InlinePath r
-                |> Some
         | Naming.StartsWith "import" suffix, _ ->
             match suffix, args with
             | "Member", [ RequireStringConst com ctx r path ] ->
@@ -1242,7 +1096,11 @@ let operators (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr o
             match genArg with
             | Char -> "Range", "rangeChar", args
             | Number(Decimal,_) -> "Range", "rangeDecimal", addStep args
-            | Number(BigInt,_) -> "Range", "rangeBigInt", addStep args
+            | Number(BigInt,_)
+            | Number(Int32,_)
+            | Number(UInt32,_) -> "Range", "range_big_int", addStep args
+            | Number(Int64,_)
+            | Number(UInt64,_) -> "Range", "range_int64", addStep args
             | _ -> "Range", "rangeDouble", addStep args
 
         Helper.LibCall(com, modul, meth, t, args, i.SignatureArgTypes, ?loc = r)
@@ -1329,16 +1187,8 @@ let operators (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr o
         makeBinOp r t dividend divisor BinaryDivide
         |> Some
     | "Abs", _ ->
-        match args with
-        | ExprType(Number (Int64|Decimal as kind,_))::_ ->
-            let modName =
-                match kind with
-                | Decimal -> "decimal"
-                | _ -> "long"
-            Helper.LibCall(com, modName, "abs", t, args, i.SignatureArgTypes, ?thisArg=thisArg, ?loc=r) |> Some
-        | _ ->
-            Helper.GlobalCall("abs", t, args, [ t ], ?loc = r)
-            |> Some
+        Helper.GlobalCall("abs", t, args, [ t ], ?loc = r)
+        |> Some
     | "Acos", _
     | "Asin", _
     | "Atan", _
@@ -2336,6 +2186,9 @@ let parseNum (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr op
 
         let style = int System.Globalization.NumberStyles.Any
         parseCall meth str args style
+    | "Pow", _ ->
+        Helper.ImportedCall("math", "pow", t, args, i.SignatureArgTypes, ?loc = r)
+        |> Some
     | "ToString", [ ExprTypeAs (String, format) ] ->
         let format = emitExpr r String [ format ] "'{0:' + $0 + '}'"
 
@@ -2802,8 +2655,7 @@ let objects (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr opt
     | ".ctor", _, _ -> typedObjExpr t [] |> Some
     | "ToString", Some arg, _ -> toString com ctx r [ arg ] |> Some
     | "ReferenceEquals", _, [ left; right ] ->
-        //makeEqOp r left right BinaryEqual |> Some
-        emitExpr None t [ left; right ] "$0 is $1" |> Some
+        makeEqOpStrict r left right BinaryEqual |> Some
     | "Equals", Some arg1, [ arg2 ]
     | "Equals", None, [ arg1; arg2 ] -> equals com ctx r true arg1 arg2 |> Some
     | "GetHashCode", Some arg, _ -> identityHash com r arg |> Some
@@ -2980,7 +2832,7 @@ let debug (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr optio
         | [ Value (BoolConstant false, _) ] -> makeDebugger r |> Some
         | arg :: _ ->
             // emit i "if (!$0) { debugger; }" i.args |> Some
-            let cond = Operation(Unary(UnaryNot, arg), Boolean, r)
+            let cond = Operation(Unary(UnaryNot, arg), Tags.empty, Boolean, r)
             IfThenElse(cond, makeDebugger r, unit, r) |> Some
     | _ -> None
 
@@ -3296,7 +3148,7 @@ let regex com (ctx: Context) r t (i: CallInfo) (thisArg: Expr option) (args: Exp
         if isGroup
         // In JS Regex group values can be undefined, ensure they're empty strings #838
         then
-            Operation(Logical(LogicalOr, thisArg.Value, makeStrConst ""), t, r)
+            Operation(Logical(LogicalOr, thisArg.Value, makeStrConst ""), Tags.empty, t, r)
             |> Some
         else
             propInt 0 thisArg.Value |> Some
@@ -4045,7 +3897,7 @@ let tryCall (com: ICompiler) (ctx: Context) r t (info: CallInfo) (thisArg: Expr 
 
 let tryBaseConstructor com ctx (ent: EntityRef) (argTypes: Lazy<Type list>) genArgs args =
     match ent.FullName with
-    | Types.exception_ -> Some(makeImportLib com Any "Exception" "Types", args)
+    | Types.exception_ -> Some(makeIdentExpr("Exception"), args)
     | Types.attribute -> Some(makeImportLib com Any "Attribute" "Types", args)
     | Types.dictionary ->
         let args =

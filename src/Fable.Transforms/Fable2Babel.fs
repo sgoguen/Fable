@@ -44,7 +44,7 @@ type Context =
 type IBabelCompiler =
     inherit Compiler
     abstract GetAllImports: unit -> seq<Import>
-    abstract GetImportExpr: Context * selector: string * path: string * SourceLocation option -> Expression
+    abstract GetImportExpr: Context * selector: string * path: string * range: SourceLocation option * ?noMangle: bool -> Expression
     abstract TransformAsExpr: Context * Fable.Expr -> Expression
     abstract TransformAsStatements: Context * ReturnStrategy option * Fable.Expr -> Statement array
     abstract TransformImport: Context * selector:string * path:string -> Expression
@@ -630,13 +630,13 @@ module Util =
             | Naming.Regex IMPORT_REGEX (_::selector::path::_) ->
                 if selector.StartsWith("{") then
                     for selector in selector.TrimStart('{').TrimEnd('}').Split(',') do
-                        com.GetImportExpr(ctx, selector, path, r) |> ignore
+                        com.GetImportExpr(ctx, selector, path, r, noMangle=true) |> ignore
                     true
                 else
                     let selector =
                         if selector.StartsWith("*") then selector
                         else $"default as {selector}"
-                    com.GetImportExpr(ctx, selector, path, r) |> ignore
+                    com.GetImportExpr(ctx, selector, path, r, noMangle=true) |> ignore
                     true
             | _ -> false)
         |> String.concat "\n"
@@ -864,7 +864,7 @@ module Util =
         ClassMember.classMethod(ClassPrimaryConstructor, Expression.identifier("constructor"), args, body)
 
     let callFunction com ctx r funcExpr genArgs (args: Expression list) =
-        let genArgs = Annotation.makeTypeParamInstantiationIfTypeScript com ctx genArgs
+        let genArgs = makeTypeParamInstantiationIfTypeScript com ctx genArgs
         Expression.callExpression(funcExpr, List.toArray args, ?typeParameters=genArgs, ?loc=r)
 
     let callFunctionWithThisContext r funcExpr (args: Expression list) =
@@ -903,7 +903,7 @@ module Util =
             | Attached(isStatic=false), (thisArg::args) ->
                 let body =
                     // TODO: If ident is not captured maybe we can just replace it with "this"
-                    if FableTransforms.isIdentUsed thisArg.Name body then
+                    if isIdentUsed thisArg.Name body then
                         let thisKeyword = Fable.IdentExpr { thisArg with Name = "this" }
                         Fable.Let(thisArg, thisKeyword, body)
                     else body
@@ -970,7 +970,7 @@ module Util =
         let rec checkCrossRefs tempVars allArgs = function
             | [] -> tempVars
             | (argId, _arg)::rest ->
-                let found = allArgs |> List.exists (FableTransforms.deepExists (function
+                let found = allArgs |> List.exists (deepExists (function
                     | Fable.IdentExpr i -> argId = i.Name
                     | _ -> false))
                 let tempVars =
@@ -1031,10 +1031,10 @@ module Util =
         | Fable.BaseValue(None,_) -> Super(None)
         | Fable.BaseValue(Some boundIdent,_) -> identAsExpr boundIdent
         | Fable.ThisValue _ -> Expression.thisExpression()
-        | Fable.TypeInfo(t, tag) ->
+        | Fable.TypeInfo(t, tags) ->
             if com.Options.NoReflection then addErrorAndReturnNull com r "Reflection is disabled"
             else
-                let genMap = if List.contains "allow-generics" tag then None else Some Map.empty
+                let genMap = if List.contains "allow-generics" tags then None else Some Map.empty
                 transformTypeInfo com ctx r genMap t
         | Fable.Null _t ->
             // if com.Options.Language = TypeScript
@@ -1336,7 +1336,13 @@ module Util =
         | None -> Expression.nullLiteral()
         | Some(props, children) ->
             let componentOrTag = transformAsExpr com ctx componentOrTag
-            let children = children |> List.map (transformAsExpr com ctx)
+            let children =
+                children
+                |> List.map (transformAsExpr com ctx)
+                |> function
+                    // Because of call optimizations, it may happen a list has been transformed to an array in JS
+                    | [ArrayExpression(children, _)] -> Array.toList children
+                    | children -> children
             let props = props |> List.rev |> List.map (fun (k, v) -> k, transformAsExpr com ctx v)
             Expression.jsxElement(componentOrTag, props, children)
 
@@ -1352,10 +1358,18 @@ module Util =
         // Try to optimize some patterns after FableTransforms
         let optimized =
             match callInfo.Tags, callInfo.Args with
-            | Fable.Tags.Contains "array" , [Replacements.Util.ArrayOrListLiteral(vals,_)] ->
-                Fable.Value(Fable.NewArray(Fable.ArrayValues vals, Fable.Any, Fable.MutableArray), range)
-                |> transformAsExpr com ctx
-                |> Some
+            | Fable.Tags.Contains "array", [maybeList] ->
+                match maybeList with
+                | Replacements.Util.ArrayOrListLiteral(vals,_) ->
+                    Fable.Value(Fable.NewArray(Fable.ArrayValues vals, Fable.Any, Fable.MutableArray), range)
+                    |> transformAsExpr com ctx
+                    |> Some
+                | Fable.Call(Fable.Import({Selector = "toList"; Path = Naming.EndsWith "/Seq.js" _; Kind = Fable.LibraryImport _},_,_), callInfo, _,_) ->
+                    List.head callInfo.Args
+                    |> Replacements.Util.toArray range typ
+                    |> transformAsExpr com ctx
+                    |> Some
+                | _ -> None
             | Fable.Tags.Contains "pojo", keyValueList::caseRule::_ ->
                 JS.Replacements.makePojo com (Some caseRule) keyValueList
                 |> Option.map (transformAsExpr com ctx)
@@ -1644,7 +1658,7 @@ module Util =
 
     let transformDecisionTreeAsSwitch expr =
         let (|Equals|_|) = function
-            | Fable.Operation(Fable.Binary(BinaryEqual, expr, right), _, _) ->
+            | Fable.Operation(Fable.Binary(BinaryEqual, expr, right), _, _, _) ->
                 match expr with
                 | Fable.Value((Fable.CharConstant _ | Fable.StringConstant _ | Fable.NumberConstant _), _) -> Some(expr, right)
                 | _ -> None
@@ -1724,7 +1738,7 @@ module Util =
                     let targetRefs = Map.add idx (count + 1) targetRefs
                     findSuccess targetRefs exprs
                 | expr ->
-                    let exprs2 = FableTransforms.getSubExpressions expr
+                    let exprs2 = getSubExpressions expr
                     findSuccess targetRefs (exprs @ exprs2)
         findSuccess Map.empty [expr] |> Seq.choose (fun kv ->
             if kv.Value > 1 then Some kv.Key else None) |> Seq.toList
@@ -1781,7 +1795,7 @@ module Util =
             let targets =
                 targets |> List.map (fun (idents, expr) ->
                     idents
-                    |> List.exists (fun i -> FableTransforms.isIdentUsed i.Name expr)
+                    |> List.exists (fun i -> isIdentUsed i.Name expr)
                     |> function
                         | true -> idents, expr
                         | false -> [], expr)
@@ -1821,8 +1835,8 @@ module Util =
             transformFunctionWithAnnotations com ctx name None [arg] body
             |> makeArrowFunctionExpression name
 
-        | Fable.Delegate(args, body, name, tag) ->
-            if List.contains "not-arrow" tag then
+        | Fable.Delegate(args, body, name, tags) ->
+            if List.contains "not-arrow" tags then
                 let id = name |> Option.map Identifier.identifier
                 let args, body, returnType, typeParamDecl = transformFunctionWithAnnotations com ctx name None args body
                 Expression.functionExpression(args, body, ?id=id, ?returnType=returnType, ?typeParameters=typeParamDecl)
@@ -1839,7 +1853,7 @@ module Util =
         | Fable.CurriedApply(callee, args, _, range) ->
             transformCurriedApply com ctx range callee args
 
-        | Fable.Operation(kind, _, range) ->
+        | Fable.Operation(kind, _, _, range) ->
             transformOperation com ctx range kind
 
         | Fable.Get(expr, kind, typ, range) ->
@@ -1942,7 +1956,7 @@ module Util =
                 [|ExpressionStatement(e)|] // Ignore the return strategy
             else [|resolveExpr t returnStrategy e|]
 
-        | Fable.Operation(kind, t, range) ->
+        | Fable.Operation(kind, _, t, range) ->
             [|transformOperation com ctx range kind |> resolveExpr t returnStrategy|]
 
         | Fable.Get(expr, kind, t, range) ->
@@ -2495,7 +2509,7 @@ module Util =
             yield! statefulImports
         ]
 
-    let getIdentForImport (ctx: Context) (path: string) (selector: string) =
+    let getIdentForImport (com: IBabelCompiler) (ctx: Context) noMangle (path: string) (selector: string) =
         if System.String.IsNullOrEmpty selector then selector, None
         else
             let selector, alias =
@@ -2509,7 +2523,16 @@ module Util =
                         else alias
                     selector, alias
                 | _ -> selector, selector
-            selector, alias |> getUniqueNameInRootScope ctx |> Some
+
+            let alias =
+                if noMangle then
+                    let noConflict = ctx.UsedNames.RootScope.Add(alias)
+                    if not noConflict then
+                        com.WarnOnlyOnce($"Import {alias} conflicts with existing identifier in root scope")
+                    alias
+                else
+                    getUniqueNameInRootScope ctx alias
+            selector, Some alias
 
 module Compiler =
     open Util
@@ -2523,7 +2546,8 @@ module Compiler =
                 if onlyOnceWarnings.Add(msg) then
                     addWarning com [] range msg
 
-            member _.GetImportExpr(ctx, selector, path, r) =
+            member com.GetImportExpr(ctx, selector, path, r, noMangle) =
+                let noMangle = defaultArg noMangle false
                 let selector = selector.Trim()
                 let path = path.Trim()
                 let cachedName = path + "::" + selector
@@ -2533,7 +2557,7 @@ module Compiler =
                     | Some localIdent -> Expression.identifier(localIdent)
                     | None -> Expression.nullLiteral()
                 | false, _ ->
-                    let selector, localId = getIdentForImport ctx path selector
+                    let selector, localId = getIdentForImport com ctx noMangle path selector
                     if selector = Naming.placeholder then
                         "`importMember` must be assigned to a variable"
                         |> addError com [] r

@@ -106,20 +106,20 @@ let objExpr kvs =
     typedObjExpr Any kvs
 
 let add left right =
-    Operation(Binary(BinaryPlus, left, right), left.Type, None)
+    Operation(Binary(BinaryPlus, left, right), Tags.empty, left.Type, None)
 
 let sub left right =
-    Operation(Binary(BinaryMinus, left, right), left.Type, None)
+    Operation(Binary(BinaryMinus, left, right), Tags.empty, left.Type, None)
 
 let eq left right =
-    Operation(Binary(BinaryEqual, left, right), Boolean, None)
+    Operation(Binary(BinaryEqual, left, right), Tags.empty, Boolean, None)
 
 let neq left right =
-    Operation(Binary(BinaryUnequal, left, right), Boolean, None)
+    Operation(Binary(BinaryUnequal, left, right), Tags.empty, Boolean, None)
 
 let nullCheck r isNull expr =
     let op = if isNull then BinaryEqual else BinaryUnequal
-    Operation(Binary(op, expr, Value(Null expr.Type, None)), Boolean, r)
+    Operation(Binary(op, expr, Value(Null expr.Type, None)), Tags.empty, Boolean, r)
 
 let str txt = Value(StringConstant txt, None)
 
@@ -463,15 +463,17 @@ let tryFindInScope (ctx: Context) identName =
     let rec findInScopeInner scope identName =
         match scope with
         | [] -> None
-        | (ident2: Ident, expr: Expr option)::prevScope ->
+        | (_, ident2: Ident, expr)::prevScope ->
             if identName = ident2.Name then
                 match expr with
-                | Some(MaybeCasted(IdentExpr ident)) when not ident.IsMutable -> findInScopeInner prevScope ident.Name
+                | Some(MaybeCasted(IdentExpr ident)) -> findInScopeInner prevScope ident.Name
                 | expr -> expr
+                |> Option.map (fun e ->
+                    if not(isNull ctx.CapturedBindings) then
+                        ctx.CapturedBindings.Add(identName) |> ignore
+                    e)
             else findInScopeInner prevScope identName
-    let scope1 = ctx.Scope |> List.map (fun (_,i,e) -> i,e)
-    let scope2 = ctx.ScopeInlineArgs |> List.map (fun (i,e) -> i, Some e)
-    findInScopeInner (scope1 @ scope2) identName
+    findInScopeInner ctx.Scope identName
 
 let (|MaybeInScope|) (ctx: Context) e =
     match e with
@@ -485,7 +487,7 @@ let rec (|MaybeInScopeStringConst|_|) ctx = function
     | MaybeInScope ctx expr ->
         match expr with
         | StringConst s -> Some s
-        | Operation(Binary(BinaryPlus, (MaybeInScopeStringConst ctx s1), (MaybeInScopeStringConst ctx s2)), _, _) -> Some(s1 + s2)
+        | Operation(Binary(BinaryPlus, (MaybeInScopeStringConst ctx s1), (MaybeInScopeStringConst ctx s2)), _, _, _) -> Some(s1 + s2)
         | Value(StringTemplate(None, start::parts, values),_) ->
             (Some [], values) ||> List.fold (fun acc value ->
                 match acc, value with
@@ -538,9 +540,78 @@ let (|RegexFlags|_|) e =
             | 16 -> Some [RegexSingleline]
             | 256 -> Some [] // ECMAScript flag (ignored)
             | _ -> None
-        | Operation(Binary(BinaryOrBitwise, flags1, flags2),_,_) ->
+        | Operation(Binary(BinaryOrBitwise, flags1, flags2),_,_,_) ->
             match getFlags flags1, getFlags flags2 with
             | Some flags1, Some flags2 -> Some(flags1 @ flags2)
             | _ -> None
         | _ -> None
     getFlags e
+
+let (|UniversalFableCoreHelpers|_|) (com: ICompiler) (ctx: Context) r t (i: CallInfo) args error = function
+    | "op_ErasedCast" -> List.tryHead args
+    | ".ctor" -> typedObjExpr t [] |> Some
+    | "jsNative" | "pyNative" | "nativeOnly" ->
+        // TODO: Fail at compile time?
+        addWarning com ctx.InlinePath r $"{i.CompiledName} is being compiled without replacement, this will fail at runtime."
+        let runtimeMsg =
+            "A function supposed to be replaced by native code has been called, please check."
+            |> StringConstant |> makeValue None
+        makeThrow r t (error runtimeMsg) |> Some
+
+    | "nameof" | "nameof2" as meth ->
+        match args with
+        | [Nameof com ctx name as arg] ->
+            if meth = "nameof2"
+            then makeTuple r true [makeStrConst name; arg] |> Some
+            else makeStrConst name |> Some
+        | _ -> "Cannot infer name of expression"
+               |> addError com ctx.InlinePath r
+               makeStrConst Naming.unknown |> Some
+
+    | "nameofLambda" | "namesofLambda" as meth ->
+        match args with
+        | [MaybeInScope ctx (Lambda(_, (Namesof com ctx names), _))] -> Some names
+        | _ -> None
+        |> Option.defaultWith (fun () ->
+            "Cannot infer name of expression"
+            |> addError com ctx.InlinePath r
+            [Naming.unknown])
+        |> fun names ->
+            if meth = "namesofLambda" then List.map makeStrConst names |> makeArray String |> Some
+            else List.tryHead names |> Option.map makeStrConst
+
+    | "casenameWithFieldCount" | "casenameWithFieldIndex" as meth ->
+        let rec inferCasename = function
+            | Lambda(arg, IfThenElse(Test(IdentExpr arg2, UnionCaseTest tag,_),thenExpr,_,_),_) when arg.Name = arg2.Name ->
+                match arg.Type with
+                | DeclaredType(e,_) ->
+                    let e = com.GetEntity(e)
+                    if e.IsFSharpUnion then
+                        let c = e.UnionCases[tag]
+                        let caseName = defaultArg c.CompiledName c.Name
+                        if meth = "casenameWithFieldCount" then
+                            Some(caseName, c.UnionCaseFields.Length)
+                        else
+                            match thenExpr with
+                            | NestedRevLets(bindings, IdentExpr i) ->
+                                bindings |> List.tryPick (fun (i2, v) ->
+                                    match v with
+                                    | Get(_, UnionField unionInfo,_,_) when i.Name = i2.Name -> Some unionInfo.FieldIndex
+                                    | _ -> None)
+                                |> Option.map (fun fieldIdx -> caseName, fieldIdx)
+                            | _ -> None
+                    else None
+                | _ -> None
+            | _ -> None
+
+        match args with
+        | [MaybeInScope ctx e] -> inferCasename e
+        | _ -> None
+        |> Option.orElseWith (fun () ->
+            "Cannot infer case name of expression"
+            |> addError com ctx.InlinePath r
+            Some(Naming.unknown, -1))
+        |> Option.map (fun (s, i) ->
+            makeTuple r true [makeStrConst s; makeIntConst i])
+
+    | _ -> None

@@ -331,7 +331,7 @@ module Util =
         let rec checkCrossRefs tempVars allArgs = function
             | [] -> tempVars
             | (argId, arg: Fable.Expr)::rest ->
-                let found = allArgs |> List.exists (FableTransforms.deepExists (function
+                let found = allArgs |> List.exists (deepExists (function
                     | Fable.IdentExpr i -> argId = i.Name
                     | _ -> false))
                 let tempVars =
@@ -1228,7 +1228,7 @@ module Util =
 
     let canTransformDecisionTreeAsSwitch expr =
         let (|Equals|_|) = function
-            | Fable.Operation(Fable.Binary(BinaryEqual, expr, right), _, _) ->
+            | Fable.Operation(Fable.Binary(BinaryEqual, expr, right), _, _, _) ->
                 match expr with
                 | Fable.Value((Fable.CharConstant _ | Fable.StringConstant _ | Fable.NumberConstant _), _) -> Some(expr, right)
                 | _ -> None
@@ -1303,7 +1303,7 @@ module Util =
                     let targetRefs = Map.add idx (count + 1) targetRefs
                     findSuccess targetRefs exprs
                 | expr ->
-                    let exprs2 = FableTransforms.getSubExpressions expr
+                    let exprs2 = getSubExpressions expr
                     findSuccess targetRefs (exprs @ exprs2)
         findSuccess Map.empty [expr] |> Seq.choose (fun kv ->
             if kv.Value > 1 then Some kv.Key else None) |> Seq.toList
@@ -1386,7 +1386,7 @@ module Util =
             let targets =
                 targets |> List.map (fun (idents, expr) ->
                     idents
-                    |> List.exists (fun i -> FableTransforms.isIdentUsed i.Name expr)
+                    |> List.exists (fun i -> isIdentUsed i.Name expr)
                     |> function
                         | true -> idents, expr
                         | false -> [], expr)
@@ -1551,7 +1551,7 @@ module Util =
         | Fable.Emit(info, t, _range) ->
             transformEmit com ctx t returnStrategy info
 
-        | Fable.Operation(kind, t, r) ->
+        | Fable.Operation(kind, _, t, r) ->
             transformOperation com ctx r t returnStrategy kind
 
         | Fable.Get(expr, kind, t, range) ->

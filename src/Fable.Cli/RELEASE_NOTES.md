@@ -1,3 +1,43 @@
+### 4.0.0-theta-018
+
+* When using a .csproj, make sure the project is restored before parsing
+* Rust, added Stack, Queue
+
+### 4.0.0-theta-017
+
+* Use TargetFramework from .fsproj and ask users to upgrade from netstandard2.0 if necessary
+* Update FCS (F# 7)
+* Python, handling static getters
+* Rust, fix deprecated API
+
+### 4.0.0-theta-016
+
+* Attempt to improve project parsing
+* Added Double.Pow static
+
+### 4.0.0-theta-015
+
+* JS, enable calls with `importValueDynamic`
+* JS, Support System.Delegate.DynamicInvoke
+* Rust, Added feature for func_type_enum
+* Rust, Added Func type wrappers (#3250)
+
+### 4.0.0-theta-014
+
+* Try to fix #3244 (cannot parse .fsproj)
+* Rust, added small string type
+* Python, fix byte array tying issue
+* JS, don't mangle idents from imports in emitted code
+* JS, optimize some array transforms
+
+### 4.0.0-theta-012
+
+* Python, option fixes
+* Python, fixes for reference equals with literals
+* Python, reduce the number of generated arrow functions
+* Rust, Added bigint support
+* Use Buildalyzer for parsing .fsproj
+
 ### 4.0.0-theta-011
 
 * Python, add read/write files

@@ -25,7 +25,7 @@ type CliArgs =
       NoParallelTypeCheck: bool
       SourceMaps: bool
       SourceMapsRoot: string option
-      Exclude: string option
+      Exclude: string list
       Replace: Map<string, string>
       RunProcess: RunProcess option
       CompilerOptions: Fable.CompilerOptions }
@@ -248,6 +248,11 @@ module File =
     let isDirectoryEmpty dir =
         not(Directory.Exists(dir)) || Directory.EnumerateFileSystemEntries(dir) |> Seq.isEmpty
 
+    let safeDelete path =
+        try
+            File.Delete(path)
+        with _ -> ()
+
     let withLock (dir: string) (action: unit -> 'T) =
         let mutable fileCreated = false
         let lockFile = Path.Join(dir, "fable.lock")
@@ -329,14 +334,15 @@ module Process =
         IO.Path.GetFullPath(dir) + (if isWindows() then ";" else ":") + currentPath
 
     // Adapted from https://github.com/enricosada/dotnet-proj-info/blob/1e6d0521f7f333df7eff3148465f7df6191e0201/src/dotnet-proj/Program.fs#L155
-    let private startProcess (envVars: (string * string) list) workingDir exePath (args: string list) =
+    let private startProcess redirectOutput (envVars: (string * string) list) workingDir exePath (args: string list) =
         let exePath, args =
             if isWindows() then "cmd", "/C"::exePath::args
             else exePath, args
 
         // TODO: We should use cliArgs.RootDir instead of Directory.GetCurrentDirectory here but it's only informative
         // so let's leave it as is for now to avoid having to pass the cliArgs through all the call sites
-        Log.always $"""{File.relPathToCurDir workingDir}> {exePath} {String.concat " " args}"""
+        if not redirectOutput then
+            Log.always $"""{File.relPathToCurDir workingDir}> {exePath} {String.concat " " args}"""
 
         let psi = ProcessStartInfo(exePath)
         for arg in args do
@@ -346,6 +352,7 @@ module Process =
         psi.WorkingDirectory <- workingDir
         psi.CreateNoWindow <- false
         psi.UseShellExecute <- false
+        psi.RedirectStandardOutput <- redirectOutput
 
         // TODO: Make this output no logs if we've set silent verbosity
         Process.Start(psi)
@@ -372,7 +379,7 @@ module Process =
         fun (workingDir: string) (exePath: string) (args: string list) ->
             try
                 runningProcess |> Option.iter kill
-                let p = startProcess envVars workingDir exePath args
+                let p = startProcess false envVars workingDir exePath args
                 runningProcess <- Some p
             with ex ->
                 Log.always("Cannot run: " + ex.Message)
@@ -382,7 +389,7 @@ module Process =
 
     let runSyncWithEnv envVars (workingDir: string) (exePath: string) (args: string list) =
         try
-            let p = startProcess envVars workingDir exePath args
+            let p = startProcess false envVars workingDir exePath args
             p.WaitForExit()
             p.ExitCode
         with ex ->
@@ -392,6 +399,11 @@ module Process =
 
     let runSync (workingDir: string) (exePath: string) (args: string list) =
         runSyncWithEnv [] workingDir exePath args
+
+    let runSyncWithOutput workingDir exePath args =
+        let p = startProcess true [] workingDir exePath args
+        p.WaitForExit()
+        p.StandardOutput.ReadToEnd()
 
 [<RequireQualifiedAccess>]
 module Async =

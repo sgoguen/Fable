@@ -14,22 +14,30 @@ type Context = FSharp2Fable.Context
 type ICompiler = FSharp2Fable.IFableCompiler
 type CallInfo = ReplaceCallInfo
 
-let curryExprAtRuntime (_com: Compiler) arity (expr: Expr) =
-    // Let's use emit for simplicity
+let partialApplyAtRuntime (com: Compiler) t arity (expr: Expr) (argExprs: Expr list) =
+    // TODO: convert to Fable.AST instead of emit
+    let funcType = Helper.LibValue(com, "Native", "Func1", Any)
     let argIdents = List.init arity (fun i -> $"arg{i}")
-    let curriedArgs = argIdents |> List.map (fun a -> $"Lrc::new(move |{a}|") |> String.concat " "
-    let curriedEnds = argIdents |> List.map (fun a -> $")") |> String.concat ""
     let args = argIdents |> String.concat ", "
-    $"%s{curriedArgs} $0(%s{args}){curriedEnds}"
-    |> emitExpr None expr.Type [expr]
+    let makeArg a = $"$0::new(move |{a}| "
+    let makeEnd a = $")"
+    let curriedArgs = argIdents |> List.map makeArg |> String.concat ""
+    let curriedEnds = argIdents |> List.map makeEnd |> String.concat ""
+    let appliedArgs = argExprs |> List.mapi (fun i _a -> $"${i + 2}, ") |> String.concat ""
+    let fmt = $"%s{curriedArgs}$1(%s{appliedArgs}%s{args}){curriedEnds}"
+    fmt |> emitExpr None t (funcType::expr::argExprs)
+
+let curryExprAtRuntime (com: Compiler) arity (expr: Expr) =
+    partialApplyAtRuntime com expr.Type arity expr []
 
 let uncurryExprAtRuntime (com: Compiler) t arity (expr: Expr) =
     let uncurry expr =
+        let funcType = Helper.LibValue(com, "Native", $"Func{arity}", Any)
         let argIdents = List.init arity (fun i -> $"arg{i}")
         let args = argIdents |> String.concat ", "
         let appliedArgs = argIdents |> String.concat ")("
-        $"Lrc::new(move |%s{args}| $0(%s{appliedArgs}))"
-        |> emitExpr None t [expr]
+        let fmt = $"$0::new(move |%s{args}| $1(%s{appliedArgs}))"
+        fmt |> emitExpr None t [funcType; expr]
     match expr with
     | Value(Null _, _) -> expr
     | Value(NewOption(value, t, isStruct), r) ->
@@ -43,18 +51,9 @@ let uncurryExprAtRuntime (com: Compiler) t arity (expr: Expr) =
         Helper.LibCall(com, "Option", "map", t, [fn; expr])
     | expr -> uncurry expr
 
-let partialApplyAtRuntime (_com: Compiler) t arity (fn: Expr) (argExprs: Expr list) =
-    let argIdents = List.init arity (fun i -> $"arg{i}")
-    let args = argIdents |> String.concat ", "
-    let curriedArgs = argIdents |> List.map (fun a -> $"Lrc::new(move |{a}|") |> String.concat " "
-    let curriedEnds = argIdents |> List.map (fun a -> $")") |> String.concat ""
-    let appliedArgs = List.init argExprs.Length (fun i -> $"${i + 1}") |> String.concat ", "
-    $"%s{curriedArgs} $0(%s{appliedArgs}, %s{args}){curriedEnds}"
-    |> emitExpr None t (fn::argExprs)
-
 let checkArity (_com: Compiler) t arity expr =
     //TODO: implement this
-    makeIntConst arity
+    expr
     // Helper.LibCall(com, "Util", "checkArity", t, [makeIntConst arity; expr])
 
 let error (msg: Expr) = msg
@@ -101,24 +100,24 @@ let makeDecimal com r t (x: decimal) =
     Helper.LibCall(com, "Decimal", "fromString", t, [makeStrConst str], isConstructor=true, ?loc=r)
 
 let makeRef (value: Expr) =
-    Operation(Unary(UnaryAddressOf, value), value.Type, None)
+    Operation(Unary(UnaryAddressOf, value), Tags.empty, value.Type, None)
 
 let getRefCell com r t (expr: Expr) =
     Helper.InstanceCall(expr, "get", t, [], ?loc=r)
     |> nativeCall
 
 let setRefCell com r (expr: Expr) (value: Expr) =
-    Fable.Set(expr, Fable.ValueSet, value.Type, value, r)
+    Set(expr, ValueSet, value.Type, value, r)
 
 let makeRefCell com r typ (value: Expr) =
     Helper.LibCall(com, "Native", "refCell", typ, [value], ?loc=r)
 
 let makeRefFromMutableValue com ctx r t (value: Expr) =
-    Operation(Unary(UnaryAddressOf, value), t, r)
+    Operation(Unary(UnaryAddressOf, value), Tags.empty, t, r)
 
 let makeRefFromMutableField com ctx r t callee key =
     let value = Get(callee, FieldInfo.Create(key), t, r)
-    Operation(Unary(UnaryAddressOf, value), t, r)
+    Operation(Unary(UnaryAddressOf, value), Tags.empty, t, r)
 
 // Mutable and public module values are compiled as functions
 let makeRefFromMutableFunc com ctx r t (value: Expr) =
@@ -377,16 +376,16 @@ let getMut expr =
 
 let applyOp (com: ICompiler) (ctx: Context) r t opName (args: Expr list) =
     let unOp operator operand =
-        Operation(Unary(operator, operand), t, r)
+        Operation(Unary(operator, operand), Tags.empty, t, r)
     let binOp op left right =
-        Operation(Binary(op, left, right), t, r)
+        Operation(Binary(op, left, right), Tags.empty, t, r)
     let truncateUnsigned operation = // see #1550
         match t with
         // | Number(UInt32,_) ->
         //     Operation(Binary(BinaryShiftRightZeroFill,operation,makeIntConst 0), t, r)
         | _ -> operation
     let logicOp op left right =
-        Operation(Logical(op, left, right), Boolean, r)
+        Operation(Logical(op, left, right), Tags.empty, Boolean, r)
     let nativeOp opName argTypes args =
         match opName, args with
         | Operators.addition, [left; right] -> binOp BinaryPlus left right
@@ -702,7 +701,7 @@ let makeGenericAverager (com: ICompiler) ctx t =
 //             match injectType with
 //             | Types.icomparerGeneric ->
 //                 args @ [makeComparer com ctx genArg]
-//             | Types.equalityComparer ->
+//             | Types.iequalityComparer ->
 //                 args @ [makeEqualityComparer com ctx genArg]
 //             | Types.arrayCons ->
 //                 match genArg with
@@ -732,94 +731,8 @@ let tryCoreOp com r t coreModule coreMember args =
     tryOp com r t op args
 
 let fableCoreLib (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr option) (args: Expr list) =
-    let fixDynamicImportPath = function
-        | Value(StringConstant path, r) when path.EndsWith(".fs") ->
-            // In imports *.ts extensions have to be converted to *.js extensions instead
-            let fileExt = com.Options.FileExtension
-            let fileExt = if fileExt.EndsWith(".ts") then Path.ChangeExtension(fileExt, ".js") else fileExt
-            Value(StringConstant(Path.ChangeExtension(path, fileExt)), r)
-        | path -> path
-
     match i.DeclaringEntityFullName, i.CompiledName with
-    | _, "op_ErasedCast" -> List.tryHead args
-    | _, ".ctor" -> typedObjExpr t [] |> Some
-    | _, ("jsNative"|"nativeOnly") ->
-        // TODO: Fail at compile time?
-        addWarning com ctx.InlinePath r $"{i.CompiledName} is being compiled without replacement, this will fail at runtime."
-        let runtimeMsg =
-            "A function supposed to be replaced by JS native code has been called, please check."
-            |> StringConstant |> makeValue None
-        makeThrow r t (error runtimeMsg) |> Some
-    | _, ("nameof"|"nameof2" as meth) ->
-        match args with
-        | [Nameof com ctx name as arg] ->
-            if meth = "nameof2"
-            then makeTuple r true [makeStrConst name; arg] |> Some
-            else makeStrConst name |> Some
-        | _ -> "Cannot infer name of expression"
-               |> addError com ctx.InlinePath r
-               makeStrConst Naming.unknown |> Some
-    | _, ("nameofLambda"|"namesofLambda" as meth) ->
-        match args with
-        | [Lambda(_, (Namesof com ctx names), _)] -> Some names
-        | [MaybeCasted(IdentExpr ident)] ->
-            match tryFindInScope ctx ident.Name with
-            | Some(Lambda(_, (Namesof com ctx names), _)) -> Some names
-            | _ -> None
-        | _ -> None
-        |> Option.defaultWith (fun () ->
-            "Cannot infer name of expression"
-            |> addError com ctx.InlinePath r
-            [Naming.unknown])
-        |> fun names ->
-            if meth = "namesofLambda" then List.map makeStrConst names |> makeArray String |> Some
-            else List.tryHead names |> Option.map makeStrConst
-
-    | _, ("casenameWithFieldCount"|"casenameWithFieldIndex" as meth) ->
-        let rec inferCasename = function
-            | Lambda(arg, IfThenElse(Test(IdentExpr arg2, UnionCaseTest tag,_),thenExpr,_,_),_) when arg.Name = arg2.Name ->
-                match arg.Type with
-                | DeclaredType(e,_) ->
-                    let e = com.GetEntity(e)
-                    if e.IsFSharpUnion then
-                        let c = e.UnionCases[tag]
-                        let caseName = defaultArg c.CompiledName c.Name
-                        if meth = "casenameWithFieldCount" then
-                            Some(caseName, c.UnionCaseFields.Length)
-                        else
-                            match thenExpr with
-                            | NestedRevLets(bindings, IdentExpr i) ->
-                                bindings |> List.tryPick (fun (i2, v) ->
-                                    match v with
-                                    | Get(_, UnionField unionInfo,_,_) when i.Name = i2.Name -> Some unionInfo.FieldIndex
-                                    | _ -> None)
-                                |> Option.map (fun fieldIdx -> caseName, fieldIdx)
-                            | _ -> None
-                    else None
-                | _ -> None
-            | _ -> None
-
-        match args with
-        | [MaybeCasted(IdentExpr ident)] -> tryFindInScope ctx ident.Name |> Option.bind inferCasename
-        | [e] -> inferCasename e
-        | _ -> None
-        |> Option.orElseWith (fun () ->
-            "Cannot infer case name of expression"
-            |> addError com ctx.InlinePath r
-            Some(Naming.unknown, -1))
-        |> Option.map (fun (s, i) ->
-            makeTuple r true [makeStrConst s; makeIntConst i])
-
-    // Extensions
-    | _, "Async.AwaitPromise.Static" -> Helper.LibCall(com, "Async", "awaitPromise", t, args, ?loc=r) |> Some
-    | _, "Async.StartAsPromise.Static" -> Helper.LibCall(com, "Async", "startAsPromise", t, args, ?loc=r) |> Some
-    | _, "FormattableString.GetStrings" -> getFieldWith r t thisArg.Value "strs" |> Some
-
-    | "Fable.Core.Testing.Assert", _ ->
-        match i.CompiledName with
-        | "AreEqual" -> Helper.LibCall(com, "Util", "assertEqual", t, args, ?loc=r) |> Some
-        | "NotEqual" -> Helper.LibCall(com, "Util", "assertNotEqual", t, args, ?loc=r) |> Some
-        | _ -> None
+    | _, UniversalFableCoreHelpers com ctx r t i args error expr -> Some expr
     | "Fable.Core.Reflection", meth ->
         Helper.LibCall(com, "Reflection", meth, t, args, ?loc=r) |> Some
     | "Fable.Core.Compiler", meth ->
@@ -836,65 +749,7 @@ let fableCoreLib (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Exp
         | "typedArrays" -> makeBoolConst com.Options.TypedArrays |> Some
         | "extension" -> makeStrConst com.Options.FileExtension |> Some
         | _ -> None
-    | "Fable.Core.JsInterop", _ ->
-        match i.CompiledName, args with
-        | "importDynamic", [path] ->
-            let path = fixDynamicImportPath path
-            Helper.GlobalCall("import", t, [path], ?loc=r) |> Some
-        | "importValueDynamic", [arg] ->
-            let dynamicImport selector path =
-                let path = fixDynamicImportPath path
-                let import = Helper.GlobalCall("import", t, [path], ?loc=r)
-                match selector with
-                | StringConst "*" -> import
-                | selector ->
-                    let selector =
-                        let m = makeIdent "m"
-                        Delegate([m], Get(IdentExpr m, ExprGet selector, Any, None), None, Tags.empty)
-                    makeInstanceCall r t i import "then" [selector]
-            let arg =
-                match arg with
-                | IdentExpr ident ->
-                    tryFindInScope ctx ident.Name
-                    |> Option.defaultValue arg
-                | arg -> arg
-            match arg with
-            // TODO: Check this is not a fable-library import?
-            | Import(info,_,_) ->
-                dynamicImport (makeStrConst info.Selector) (makeStrConst info.Path) |> Some
-            | NestedLambda(args, Call(Import(importInfo,_,_),callInfo,_,_), None)
-                when argEquals args callInfo.Args ->
-                dynamicImport (makeStrConst importInfo.Selector) (makeStrConst importInfo.Path) |> Some
-            | _ ->
-                "The imported value is not coming from a different file"
-                |> addErrorAndReturnNull com ctx.InlinePath r |> Some
-        | Naming.StartsWith "import" suffix, _ ->
-            match suffix, args with
-            | "Member", [RequireStringConst com ctx r path]      -> makeImportUserGenerated r t Naming.placeholder path |> Some
-            | "Default", [RequireStringConst com ctx r path]     -> makeImportUserGenerated r t "default" path |> Some
-            | "SideEffects", [RequireStringConst com ctx r path] -> makeImportUserGenerated r t "" path |> Some
-            | "All", [RequireStringConst com ctx r path]         -> makeImportUserGenerated r t "*" path |> Some
-            | _, [RequireStringConst com ctx r selector; RequireStringConst com ctx r path] -> makeImportUserGenerated r t selector path |> Some
-            | _ -> None
-        // Dynamic casting, erase
-        | "op_BangHat", [arg] -> Some arg
-        | "op_BangBang", [arg] ->
-            match arg, i.GenericArgs with
-            | IsNewAnonymousRecord(_, exprs, fieldNames, _, _, _),
-              [_; DeclaredType(ent, [])] ->
-                let ent = com.GetEntity(ent)
-                if ent.IsInterface then
-                    FSharp2Fable.TypeHelpers.fitsAnonRecordInInterface com r exprs fieldNames ent
-                    |> function
-                       | Error errors ->
-                            errors
-                            |> List.iter (fun (range, error) -> addWarning com ctx.InlinePath range error)
-                            Some arg
-                       | Ok () ->
-                            Some arg
-                else Some arg
-            | _ -> Some arg
-        | _ -> None
+    | "Fable.Core.JsInterop", "op_BangHat"-> List.tryHead args
     | "Fable.Core.Rust", _ ->
         match i.CompiledName, args with
         | "import", [RequireStringConst com ctx r selector; RequireStringConst com ctx r path] ->
@@ -1475,7 +1330,9 @@ let strings (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr opt
         | _ -> None
     | "CompareTo", Some c, [ExprType String] ->
         Helper.LibCall(com, "Util", "compare", t, c::args, ?loc=r) |> Some
-    | "Compare", None, [ExprType String; ExprType String] ->
+    | "Compare", None, (ExprType String :: ExprType String :: _) ->
+        $"String.Compare will be compiled as String.CompareOrdinal"
+        |> addWarning com ctx.InlinePath r
         Helper.LibCall(com, "Util", "compare", t, args, ?loc=r) |> Some
     | "CompareOrdinal", None, [ExprType String; ExprType String] ->
         Helper.LibCall(com, "Util", "compare", t, args, ?loc=r) |> Some
@@ -1868,11 +1725,11 @@ let parseNum (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr op
     | "IsPositiveInfinity", [arg] when isFloat ->
         let op1 = makeInstanceCall r t i arg "is_sign_positive" []
         let op2 = makeInstanceCall r t i arg "is_infinite" []
-        Operation(Logical(LogicalAnd, op1, op2), t, None) |> Some
+        Operation(Logical(LogicalAnd, op1, op2), Tags.empty, t, None) |> Some
     | "IsNegativeInfinity", [arg] when isFloat ->
         let op1 = makeInstanceCall r t i arg "is_sign_negative" []
         let op2 = makeInstanceCall r t i arg "is_infinite" []
-        Operation(Logical(LogicalAnd, op1, op2), t, None) |> Some
+        Operation(Logical(LogicalAnd, op1, op2), Tags.empty, t, None) |> Some
     | "IsInfinity", [arg] when isFloat ->
         makeInstanceCall r t i arg "is_infinite" [] |> Some
     | ("Parse" | "TryParse") as meth,
@@ -1896,6 +1753,8 @@ let parseNum (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr op
             |> addWarning com ctx.InlinePath r
         let style = int System.Globalization.NumberStyles.Any
         parseCall meth str args style
+    | "Pow", (thisArg::restArgs) ->
+        makeInstanceCall r t i thisArg "powf" restArgs |> Some
     | "ToString", [ExprTypeAs(String, format)] ->
         let format = emitExpr r String [format] "'{0:' + $0 + '}'"
         Helper.LibCall(com, "String", "format", t, [format; thisArg.Value], [format.Type; thisArg.Value.Type], ?loc=r) |> Some
@@ -2361,7 +2220,7 @@ let debug (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr optio
         | [Value(BoolConstant false,_)] -> makeDebugger r |> Some
         | arg::_ ->
             // emit i "if (!$0) { debugger; }" i.args |> Some
-            let cond = Operation(Unary(UnaryNot, arg), Boolean, r)
+            let cond = Operation(Unary(UnaryNot, arg), Tags.empty, Boolean, r)
             IfThenElse(cond, makeDebugger r, unit, r) |> Some
     | _ -> None
 
@@ -2473,10 +2332,10 @@ let timeSpans (com: ICompiler) (ctx: Context) r t (i: CallInfo) (thisArg: Expr o
             |> addError com ctx.InlinePath r
             None
     // | "Zero" etc. -> // for static fields, see tryField
-    | "Add" -> Operation(Binary(BinaryOperator.BinaryPlus, thisArg.Value, args.Head), t, r) |> Some
-    | "Subtract" -> Operation(Binary(BinaryOperator.BinaryMinus, thisArg.Value,  args.Head), t, r) |> Some
-    | "Multiply" -> Operation(Binary(BinaryOperator.BinaryMultiply, thisArg.Value,  args.Head), t, r) |> Some
-    | "Divide" -> Operation(Binary(BinaryOperator.BinaryDivide, thisArg.Value,  args.Head), t, r) |> Some
+    | "Add" -> Operation(Binary(BinaryOperator.BinaryPlus, thisArg.Value, args.Head), Tags.empty, t, r) |> Some
+    | "Subtract" -> Operation(Binary(BinaryOperator.BinaryMinus, thisArg.Value,  args.Head), Tags.empty, t, r) |> Some
+    | "Multiply" -> Operation(Binary(BinaryOperator.BinaryMultiply, thisArg.Value,  args.Head), Tags.empty, t, r) |> Some
+    | "Divide" -> Operation(Binary(BinaryOperator.BinaryDivide, thisArg.Value,  args.Head), Tags.empty, t, r) |> Some
     | meth ->
         let meth = Naming.removeGetSetPrefix meth |> Naming.applyCaseRule Fable.Core.CaseRules.SnakeCase
         match thisArg with
@@ -2598,7 +2457,7 @@ let regex com (ctx: Context) r t (i: CallInfo) (thisArg: Expr option) (args: Exp
     | "get_Value" ->
         if isGroup
         // In JS Regex group values can be undefined, ensure they're empty strings #838
-        then Operation(Logical(LogicalOr, thisArg.Value, makeStrConst ""), t, r) |> Some
+        then Operation(Logical(LogicalOr, thisArg.Value, makeStrConst ""), Tags.empty, t, r) |> Some
         else propInt 0 thisArg.Value |> Some
     | "get_Length" ->
         if isGroup
@@ -2611,14 +2470,14 @@ let regex com (ctx: Context) r t (i: CallInfo) (thisArg: Expr option) (args: Exp
     // MatchCollection & GroupCollection
     | "get_Item" when i.DeclaringEntityFullName = "System.Text.RegularExpressions.GroupCollection" ->
         // can be group index or group name
-        //        `m.Groups.[0]` `m.Groups.["name"]`
+        //        `m.Groups[0]` `m.Groups["name"]`
         match (args |> List.head).Type with
         | String ->
             // name
             (* `groups` might not exist -> check first:
                 (`m`: `thisArg.Value`; `name`: `args.Head`)
                   ```ts
-                  m.groups?.[name]
+                  m.groups?[name]
                   ```
                 or here
                   ```ts
@@ -2628,7 +2487,7 @@ let regex com (ctx: Context) r t (i: CallInfo) (thisArg: Expr option) (args: Exp
             let groups = propStr "groups" thisArg.Value
             let getItem = getExpr r t groups args.Head
 
-            Operation(Logical(LogicalAnd, groups, getItem), t, None)
+            Operation(Logical(LogicalAnd, groups, getItem), Tags.empty, t, None)
             |> Some
         | _ ->
             // index

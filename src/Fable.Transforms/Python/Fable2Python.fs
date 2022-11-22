@@ -506,7 +506,7 @@ module Helpers =
         if fields.Length < 1 then
             false
         else
-            match fields.[0].Type with
+            match fields[0].Type with
             | Fable.GenericParam _ -> true
             | Fable.Option _ -> true
             | Fable.Unit -> true
@@ -741,7 +741,7 @@ module Annotation =
         | Fable.Tuple (genArgs, _) -> stdlibModuleTypeHint com ctx "typing" "Tuple" genArgs
         | Fable.Array (genArg, _) ->
             match genArg with
-            | Fable.Type.Number (UInt8, _) -> stdlibModuleTypeHint com ctx "typing" "ByteString" []
+            | Fable.Type.Number (UInt8, _) -> Expression.name "bytearray", []
             | Fable.Type.Number (Int8, _)
             | Fable.Type.Number (Int16, _)
             | Fable.Type.Number (UInt16, _)
@@ -865,7 +865,7 @@ module Annotation =
         | Types.icomparerGeneric, _ ->
             let resolved, stmts = resolveGenerics com ctx genArgs repeatedGenerics
             fableModuleAnnotation com ctx "util" "IComparer_1" resolved, stmts
-        | Types.equalityComparer, _ ->
+        | Types.iequalityComparer, _ ->
             libValue com ctx "util" "IEqualityComparer", []
         | Types.iequalityComparerGeneric, _ ->
             let resolved, stmts = stdlibModuleTypeHint com ctx "typing" "Any" []
@@ -933,7 +933,7 @@ module Annotation =
                     | _ -> ()
                 makeGenericTypeAnnotation com ctx name genArgs repeatedGenerics, []
             else
-                match Lib.tryPyConstructor com ctx ent with
+                match tryPyConstructor com ctx ent with
                 | Some (entRef, stmts) ->
                     match entRef with
                     (*
@@ -982,7 +982,7 @@ module Annotation =
         // In Python a generic type arg must appear both in the argument and the return type (cannot appear only once)
         let repeatedGenerics =
             Util.getRepeatedGenericTypeParams ctx (argTypes @ [ body.Type ])
-        // printfn "repeatedGenerics: %A" (repeatedGenerics, argTypes, body.Type)
+        // printfn "repeatedGenerics: %A" (name, repeatedGenerics, argTypes, body.Type)
 
         let args', body' = com.TransformFunction(ctx, name, args, body, repeatedGenerics)
         let returnType, stmts = typeAnnotation com ctx (Some repeatedGenerics) body.Type
@@ -1378,7 +1378,7 @@ module Util =
 
                 let body =
                     // TODO: If ident is not captured maybe we can just replace it with "this"
-                    if FableTransforms.isIdentUsed thisArg.Name body then
+                    if isIdentUsed thisArg.Name body then
                         let thisKeyword = Fable.IdentExpr { thisArg with Name = "self" }
                         Fable.Let(thisArg, thisKeyword, body)
                     else
@@ -1403,8 +1403,8 @@ module Util =
                 args
             else
                 { args with
-                    VarArg = Some { args.Args.[len - 1] with Annotation = None }
-                    Args = args.Args.[.. len - 2] }
+                    VarArg = Some { args.Args[len - 1] with Annotation = None }
+                    Args = args.Args[.. len - 2] }
 
         args, body, returnType
 
@@ -1542,7 +1542,7 @@ module Util =
                 let found =
                     allArgs
                     |> List.exists (
-                        FableTransforms.deepExists (function
+                        deepExists (function
                             | Fable.IdentExpr i -> argId = i.Name
                             | _ -> false)
                     )
@@ -1953,7 +1953,7 @@ module Util =
         | Some (Assign left) -> exprAsStatement ctx (assign None left pyExpr)
         | Some (Target left) -> exprAsStatement ctx (assign None (left |> Expression.identifier) pyExpr)
 
-    let transformOperation com ctx range opKind : Expression * Statement list =
+    let transformOperation com ctx range opKind tags : Expression * Statement list =
         match opKind with
         // | Fable.Unary (UnaryVoid, TransformExpr com ctx (expr, stmts)) -> Expression.none, stmts
         // | Fable.Unary (UnaryTypeof, TransformExpr com ctx (expr, stmts)) ->
@@ -1983,27 +1983,52 @@ module Util =
             let compare op =
                 Expression.compare (left, [ op ], [ right ], ?loc = range), stmts @ stmts'
 
-            match op with
-            | BinaryEqual ->
+            let (|IsNone|_|) = function
+                | Name { Id = Identifier "None" } -> Some ()
+                | _ -> None
+
+            let strict =
+                match tags with
+                | Fable.Tags.Contains "strict" -> true
+                | _ -> false
+
+            match op, strict with
+            | BinaryEqual, true ->
                 match left, right with
                 // Use == with literals
-                | Constant _, Name { Id = Identifier "None" } -> compare Eq
+                | Constant _, _ -> compare Eq
+                | _, Constant _ -> compare Eq
+                | _ -> compare Is
+            | BinaryEqual, false ->
+                match left, right with
+                // Use == with literals
+                | Constant _, _ -> compare Eq
+                | _, Constant _ -> compare Eq
                 // Use `is` with None (except literals)
-                | _, Name { Id = Identifier "None" } -> compare Is
+                | _, IsNone -> compare Is
+                | IsNone, _ -> compare Is
                 // Use == for the rest
                 | _ -> compare Eq
-            | BinaryUnequal ->
+            | BinaryUnequal, true ->
+                match left, right with
+                // Use == with literals
+                | Constant _, _ -> compare NotEq
+                | _, Constant _ -> compare NotEq
+                | _ -> compare IsNot
+            | BinaryUnequal, false ->
                 match left, right with
                 // Use != with literals
-                | Constant _, Name { Id = Identifier "None" } -> compare NotEq
+                | Constant _, _ -> compare NotEq
+                | _, Constant _ -> compare NotEq
                 // Use `is not` with None (except literals)
-                | _, Name { Id = Identifier "None" } -> compare IsNot
+                | _, IsNone -> compare IsNot
+                | IsNone, _ -> compare IsNot
                 // Use != for the rest
                 | _ -> compare NotEq
-            | BinaryLess -> compare Lt
-            | BinaryLessOrEqual -> compare LtE
-            | BinaryGreater -> compare Gt
-            | BinaryGreaterOrEqual -> compare GtE
+            | BinaryLess, _ -> compare Lt
+            | BinaryLessOrEqual, _ -> compare LtE
+            | BinaryGreater, _ -> compare Gt
+            | BinaryGreaterOrEqual, _ -> compare GtE
             | _ -> Expression.binOp (left, op, right, ?loc = range), stmts @ stmts'
 
         | Fable.Logical (op, TransformExpr com ctx (left, stmts), TransformExpr com ctx (right, stmts')) ->
@@ -2544,7 +2569,7 @@ module Util =
     let transformDecisionTreeAsSwitch expr =
         let (|Equals|_|) =
             function
-            | Fable.Operation (Fable.Binary (BinaryEqual, expr, right), _, _) ->
+            | Fable.Operation (Fable.Binary (BinaryEqual, expr, right), _, _, _) ->
                 match expr with
                 | Fable.Value ((Fable.CharConstant _
                                | Fable.StringConstant _
@@ -2633,7 +2658,7 @@ module Util =
                     let targetRefs = Map.add idx (count + 1) targetRefs
                     findSuccess targetRefs exprs
                 | expr ->
-                    let exprs2 = FableTransforms.getSubExpressions expr
+                    let exprs2 = getSubExpressions expr
                     findSuccess targetRefs (exprs @ exprs2)
 
         findSuccess Map.empty [ expr ]
@@ -2733,7 +2758,7 @@ module Util =
                 targets
                 |> List.map (fun (idents, expr) ->
                     idents
-                    |> List.exists (fun i -> FableTransforms.isIdentUsed i.Name expr)
+                    |> List.exists (fun i -> isIdentUsed i.Name expr)
                     |> function
                         | true -> idents, expr
                         | false -> [], expr)
@@ -2869,7 +2894,7 @@ module Util =
 
         | Fable.CurriedApply (callee, args, _, range) -> transformCurriedApply com ctx range callee args
 
-        | Fable.Operation (kind, _, range) -> transformOperation com ctx range kind
+        | Fable.Operation (kind, tags, _, range) -> transformOperation com ctx range kind tags
 
         | Fable.Get (expr, kind, typ, range) -> transformGet com ctx range typ expr kind
 
@@ -3071,8 +3096,8 @@ module Util =
             else
                 stmts @ resolveExpr ctx t returnStrategy e
 
-        | Fable.Operation (kind, t, range) ->
-            let expr, stmts = transformOperation com ctx range kind
+        | Fable.Operation (kind, tags, t, range) ->
+            let expr, stmts = transformOperation com ctx range kind tags
             stmts @ (expr |> resolveExpr ctx t returnStrategy)
 
         | Fable.Get (expr, kind, t, range) ->
@@ -3243,7 +3268,14 @@ module Util =
                     match name with
                     | "tupled_arg_m" -> None // Remove these arguments (not sure why)
                     | _ ->
-                        (Arg.arg (name, ?annotation = arg.Annotation), Expression.name (name)) |> Some)
+                        let annotation =
+                            // Cleanup type annotations to avoid non-repeated generics
+                            match arg.Annotation with
+                            | Some (Expression.Name {Id = Identifier name}) -> arg.Annotation
+                            | Some (Expression.Subscript {Value=value; Slice=Expression.Name {Id = Identifier name}}) when name.StartsWith("_") ->
+                                Expression.subscript(value, stdlibModuleAnnotation com ctx "typing" "Any" []) |> Some
+                            | _ -> Some (stdlibModuleAnnotation com ctx "typing" "Any" [])
+                        (Arg.arg (name, ?annotation = annotation), Expression.name (name)) |> Some)
                 |> List.unzip
             | _ -> [], []
 
@@ -3329,12 +3361,9 @@ module Util =
         let arguments =
             match args, isUnit with
             | [], _ ->
-                let ta =
-                    stdlibModuleAnnotation com ctx "typing" "Literal" [ Expression.name "None" ]
-
                 Arguments.arguments (
                     args =
-                        Arg.arg (Identifier("__unit"), annotation = ta)
+                        Arg.arg (Identifier("__unit"), annotation = Expression.name "None")
                         :: tcArgs,
                     defaults = Expression.none :: tcDefaults
                 )
@@ -3626,23 +3655,14 @@ module Util =
 
         let arguments =
             if isStatic then
-                args
+                { args with Args = [] }
             else
                 let self = Arg.arg "self"
                 { args with Args = self :: args.Args }
 
-        // Python do not support static getters.
-        if isStatic && isGetter then
-            match body with
-            | [ Statement.Return { Value = Some x } ] ->
-                let ta, stmts = typeAnnotation com ctx None memb.Body.Type
-
-                stmts
-                @ [ Statement.assign (Expression.name key, ta, x) ]
-            | _ -> failwith "Statements not supported for static class properties"
-        else
-            Statement.functionDef (key, arguments, body = body, decoratorList = decorators, returns = returnType)
-            |> List.singleton
+        // Python do not support static getters, so make it a function instead
+        Statement.functionDef (key, arguments, body = body, decoratorList = decorators, returns = returnType)
+        |> List.singleton
 
     let transformAttachedMethod (com: IPythonCompiler) ctx (info: Fable.MemberFunctionOrValue) (memb: Fable.MemberDecl) =
         // printfn "transformAttachedMethod: %A" memb
@@ -3774,7 +3794,7 @@ module Util =
                    |> List.collecti (fun i field ->
                        let left = get com ctx None thisExpr (Naming.toSnakeCase field.Name) false
 
-                       let right = args.[i] |> wrapIntExpression field.FieldType
+                       let right = args[i] |> wrapIntExpression field.FieldType
                        assign None left right |> exprAsStatement ctx)) ]
 
         let args =

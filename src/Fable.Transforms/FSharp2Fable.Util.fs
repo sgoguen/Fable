@@ -379,9 +379,9 @@ type Scope = (FSharpMemberOrFunctionOrValue option * Fable.Ident * Fable.Expr op
 type Context =
     { Scope: Scope
       ScopeInlineValues: (FSharpMemberOrFunctionOrValue * FSharpExpr) list
-      ScopeInlineArgs: (Fable.Ident * Fable.Expr) list
       UsedNamesInRootScope: Set<string>
       UsedNamesInDeclarationScope: HashSet<string>
+      CapturedBindings: HashSet<string>
       GenericArgs: Map<string, Fable.Type>
       EnclosingMember: FSharpMemberOrFunctionOrValue option
       PrecompilingInlineFunction: FSharpMemberOrFunctionOrValue option
@@ -392,13 +392,12 @@ type Context =
       CaptureBaseConsCall: (FSharpEntity * (Fable.Expr -> unit)) option
       Witnesses: Fable.Witness list
     }
-
     static member Create(?usedRootNames) =
         { Scope = []
           ScopeInlineValues = []
-          ScopeInlineArgs = []
           UsedNamesInRootScope = defaultArg usedRootNames Set.empty
           UsedNamesInDeclarationScope = Unchecked.defaultof<_>
+          CapturedBindings = Unchecked.defaultof<_>
           GenericArgs = Map.empty
           EnclosingMember = None
           PrecompilingInlineFunction = None
@@ -985,6 +984,7 @@ module TypeHelpers =
         // Other solutions would be to add generic names to the name deduplication context or enforce Dart case conventions:
         // Pascal case for types and camel case for variables
         | Dart -> "$" + name
+        | Rust -> genParam.Name
         | _ -> name
 
     let resolveGenParam withConstraints ctxTypeArgs (genParam: FSharpGenericParameter) =
@@ -2047,7 +2047,10 @@ module Util =
                 $"Unexpected static interface/override call: %s{memb.FullName}"
                 |> attachRange r |> failwith
         let info = getAbstractMemberInfo com entity memb
-        if not info.isMangled && info.isGetter then
+
+        // Python do not support static getters, so we need to call a getter function instead
+        let isPythonStaticMember = com.Options.Language = Python && not memb.IsInstanceMember
+        if not info.isMangled && info.isGetter && not isPythonStaticMember then
             // Set the field as maybe calculated so it's not displaced by beta reduction
             let kind = Fable.FieldInfo.Create(
                 info.name,

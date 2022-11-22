@@ -122,6 +122,7 @@ module Types =
     let [<Literal>] icomparableGeneric = "System.IComparable`1"
     let [<Literal>] icomparable = "System.IComparable"
     let [<Literal>] icomparer = "System.Collections.IComparer"
+    let [<Literal>] iequalityComparer = "System.Collections.IEqualityComparer"
     let [<Literal>] iStructuralEquatable = "System.Collections.IStructuralEquatable"
     let [<Literal>] iStructuralComparable = "System.Collections.IStructuralComparable"
     let [<Literal>] idisposable = "System.IDisposable"
@@ -133,7 +134,6 @@ module Types =
     let [<Literal>] printfFormat = "Microsoft.FSharp.Core.PrintfFormat"
     let [<Literal>] createEvent = "Microsoft.FSharp.Core.CompilerServices.RuntimeHelpers.CreateEvent"
     let [<Literal>] measureProduct2 = "Microsoft.FSharp.Core.CompilerServices.MeasureProduct`2"
-    let [<Literal>] equalityComparer = "System.Collections.IEqualityComparer"
 
     // Types compatible with Inject attribute (fable library)
     let [<Literal>] icomparerGeneric = "System.Collections.Generic.IComparer`1"
@@ -480,16 +480,16 @@ module AST =
         ForLoop (ident, start, limit, body, isUp, range)
 
     let makeBinOp range typ left right op =
-        Operation(Binary(op, left, right), typ, range)
+        Operation(Binary(op, left, right), Tags.empty, typ, range)
 
     let makeUnOp range typ arg op =
-        Operation(Unary(op, arg), typ, range)
+        Operation(Unary(op, arg), Tags.empty, typ, range)
 
     let makeLogOp range left right op =
-        Operation(Logical(op, left, right), Boolean, range)
+        Operation(Logical(op, left, right), Tags.empty, Boolean, range)
 
     let makeEqOp range left right op =
-        Operation(Binary(op, left, right), Boolean, range)
+        Operation(Binary(op, left, right), Tags.empty, Boolean, range)
 
     let makeNullTyped t =
         Value(Null t, None)
@@ -913,7 +913,7 @@ module AST =
                 NewUnion(List.map f exprs, uci, ent, genArgs) |> makeValue r
         | Test(e, kind, r) -> Test(f e, kind, r)
         | Lambda(arg, body, name) -> Lambda(arg, f body, name)
-        | Delegate(args, body, name, tag) -> Delegate(args, f body, name, tag)
+        | Delegate(args, body, name, tags) -> Delegate(args, f body, name, tags)
         | ObjectExpr(members, t, baseCall) ->
             let baseCall = Option.map f baseCall
             let members = members |> List.map (fun m -> { m with Body = f m.Body })
@@ -929,14 +929,14 @@ module AST =
                 { info.CallInfo with ThisArg = Option.map f info.CallInfo.ThisArg
                                      Args = List.map f info.CallInfo.Args }
             Emit({ info with CallInfo = callInfo }, t, r)
-        | Operation(kind, t, r) ->
+        | Operation(kind, tags, t, r) ->
             match kind with
             | Unary(operator, operand) ->
-                Operation(Unary(operator, f operand), t, r)
+                Operation(Unary(operator, f operand), tags, t, r)
             | Binary(op, left, right) ->
-                Operation(Binary(op, f left, f right), t, r)
+                Operation(Binary(op, f left, f right), tags, t, r)
             | Logical(op, left, right) ->
-                Operation(Logical(op, f left, f right), t, r)
+                Operation(Logical(op, f left, f right), tags, t, r)
         | Get(e, kind, t, r) ->
             match kind with
             | ListHead | ListTail | OptionValue | TupleIndex _ | UnionTag
@@ -972,3 +972,86 @@ module AST =
         match f e with
         | Some e -> e
         | None -> visit (visitFromOutsideIn f) e
+
+    let getSubExpressions = function
+        | Unresolved _ -> []
+        | IdentExpr _ -> []
+        | TypeCast(e,_) -> [e]
+        | Import _ -> []
+        | Extended(kind, _) ->
+            match kind with
+            | Curry(e, _) -> [e]
+            | Throw(e, _) -> Option.toList e
+            | Debugger -> []
+        | Value(kind,_) ->
+            match kind with
+            | ThisValue _ | BaseValue _
+            | TypeInfo _ | Null _ | UnitConstant
+            | BoolConstant _ | CharConstant _ | StringConstant _
+            | NumberConstant _ | RegexConstant _ -> []
+            | StringTemplate(_,_,exprs) -> exprs
+            | NewOption(e, _, _) -> Option.toList e
+            | NewTuple(exprs, _) -> exprs
+            | NewArray(kind, _, _) ->
+                match kind with
+                | ArrayValues exprs -> exprs
+                | ArrayAlloc e
+                | ArrayFrom e -> [e]
+            | NewList(ht, _) ->
+                match ht with Some(h,t) -> [h;t] | None -> []
+            | NewRecord(exprs, _, _) -> exprs
+            | NewAnonymousRecord(exprs, _, _, _) -> exprs
+            | NewUnion(exprs, _, _, _) -> exprs
+        | Test(e, _, _) -> [e]
+        | Lambda(_, body, _) -> [body]
+        | Delegate(_, body, _, _) -> [body]
+        | ObjectExpr(members, _, baseCall) ->
+            let members = members |> List.map (fun m -> m.Body)
+            match baseCall with Some b -> b::members | None -> members
+        | CurriedApply(callee, args, _, _) -> callee::args
+        | Call(e1, info, _, _) -> e1 :: (Option.toList info.ThisArg) @ info.Args
+        | Emit(info, _, _) -> (Option.toList info.CallInfo.ThisArg) @ info.CallInfo.Args
+        | Operation(kind, _, _, _) ->
+            match kind with
+            | Unary(_, operand) -> [operand]
+            | Binary(_, left, right) -> [left; right]
+            | Logical(_, left, right) -> [left; right]
+        | Get(e, kind, _, _) ->
+            match kind with
+            | ListHead | ListTail | OptionValue | TupleIndex _ | UnionTag
+            | UnionField _ | FieldGet _ -> [e]
+            | ExprGet e2 -> [e; e2]
+        | Sequential exprs -> exprs
+        | Let(_, value, body) -> [value; body]
+        | LetRec(bs, body) -> (List.map snd bs) @ [body]
+        | IfThenElse(cond, thenExpr, elseExpr, _) -> [cond; thenExpr; elseExpr]
+        | Set(e, kind, _, v, _) ->
+            match kind with
+            | ExprSet e2 -> [e; e2; v]
+            | FieldSet _ | ValueSet -> [e; v]
+        | WhileLoop(e1, e2, _) -> [e1; e2]
+        | ForLoop(_, e1, e2, e3, _, _) -> [e1; e2; e3]
+        | TryCatch(body, catch, finalizer, _) ->
+            match catch with
+            | Some(_,c) -> body::c::(Option.toList finalizer)
+            | None -> body::(Option.toList finalizer)
+        | DecisionTree(expr, targets) -> expr::(List.map snd targets)
+        | DecisionTreeSuccess(_, boundValues, _) -> boundValues
+
+    let deepExists (f: Expr -> bool) expr =
+        let rec deepExistsInner (exprs: ResizeArray<Expr>) =
+            let mutable found = false
+            let subExprs = FSharp.Collections.ResizeArray()
+            for e in exprs do
+                if not found then
+                    subExprs.AddRange(getSubExpressions e)
+                    found <- f e
+            if found then true
+            elif subExprs.Count > 0 then deepExistsInner subExprs
+            else false
+        FSharp.Collections.ResizeArray [|expr|] |> deepExistsInner
+
+    let isIdentUsed identName expr =
+        expr |> deepExists (function
+            | IdentExpr i -> i.Name = identName
+            | _ -> false)

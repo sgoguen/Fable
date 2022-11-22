@@ -165,7 +165,7 @@ let private transformTraitCall com (ctx: Context) r typ (sourceTypes: Fable.Type
                     |> Option.orElseWith (fun () ->
                         resolveMemberCall entity entGenArgs traitName isInstance argTypes thisArg args)
                 else resolveMemberCall entity entGenArgs traitName isInstance argTypes thisArg args
-            | Fable.AnonymousRecordType(sortedFieldNames, entGenArgs, isStruct)
+            | Fable.AnonymousRecordType(sortedFieldNames, entGenArgs, _isStruct)
                     when isInstance && List.isEmpty args && Option.isSome thisArg ->
                 let fieldName = Naming.removeGetSetPrefix traitName
                 Seq.zip sortedFieldNames entGenArgs
@@ -1595,15 +1595,15 @@ let resolveInlineExpr (com: IFableCompiler) ctx info expr =
         let args = List.map (resolveInlineExpr com ctx info) args
         Fable.CurriedApply(resolveInlineExpr com ctx info callee, args, resolveInlineType ctx typ, r)
 
-    | Fable.Operation(kind, t, r) ->
+    | Fable.Operation(kind, tags, t, r) ->
         let t = resolveInlineType ctx t
         match kind with
         | Fable.Unary(operator, operand) ->
-            Fable.Operation(Fable.Unary(operator, resolveInlineExpr com ctx info operand), t, r)
+            Fable.Operation(Fable.Unary(operator, resolveInlineExpr com ctx info operand), tags, t, r)
         | Fable.Binary(op, left, right) ->
-            Fable.Operation(Fable.Binary(op, resolveInlineExpr com ctx info left, resolveInlineExpr com ctx info right), t, r)
+            Fable.Operation(Fable.Binary(op, resolveInlineExpr com ctx info left, resolveInlineExpr com ctx info right), tags, t, r)
         | Fable.Logical(op, left, right) ->
-            Fable.Operation(Fable.Logical(op, resolveInlineExpr com ctx info left, resolveInlineExpr com ctx info right), t, r)
+            Fable.Operation(Fable.Logical(op, resolveInlineExpr com ctx info left, resolveInlineExpr com ctx info right), tags, t, r)
 
     | Fable.Get(e, kind, t, r) ->
         let kind =
@@ -1816,11 +1816,11 @@ type FableCompiler(com: Compiler) =
                 foldArgs ((argIdent, Fable.Value(Fable.NewOption(None, argIdent.Type, false), None))::acc) (restArgIdents, [])
             | [], _ -> List.rev acc
 
-        let info: InlineExprInfo = {
-            FileName = inExpr.FileName
-            ScopeIdents = inExpr.ScopeIdents
-            ResolvedIdents = Dictionary()
-        }
+        let info: InlineExprInfo =
+            { FileName = inExpr.FileName
+              ScopeIdents = inExpr.ScopeIdents
+              ResolvedIdents = Dictionary() }
+
         let ctx, bindings =
             ((ctx, []), foldArgs [] (inExpr.Args, args)) ||> List.fold (fun (ctx, bindings) (argId, arg) ->
                 let argId = resolveInlineIdent ctx info argId
@@ -1830,8 +1830,25 @@ type FableCompiler(com: Compiler) =
                 let ctx = { ctx with Scope = (None, argId, Some arg)::ctx.Scope }
                 ctx, (argId, arg)::bindings)
 
-        let ctx = { ctx with ScopeInlineArgs = ctx.ScopeInlineArgs @ bindings }
-        bindings, resolveInlineExpr this ctx info inExpr.Body
+        let ctx =
+            { ctx with CapturedBindings =
+                       if isNull ctx.CapturedBindings then HashSet()
+                       else ctx.CapturedBindings }
+
+        let resolved = resolveInlineExpr this ctx info inExpr.Body
+
+        // Some patterns depend on inlined arguments being captured by "magic" Fable.Core functions like
+        // importValueDynamic. If the value can have side effects, it won't be removed by beta binding
+        // reduction, so we try to eliminate it here.
+        bindings |> List.filter (fun (i, v) ->
+            if ctx.CapturedBindings.Contains(i.Name) && canHaveSideEffects v then
+                if isIdentUsed i.Name resolved then
+                    $"Inlined argument {i.Name} is being captured but is also used somewhere else. " +
+                    "There's a risk of double evaluation."
+                    |> addWarning com [] i.Range
+                    true
+                else false
+            else true), resolved
 
     interface IFableCompiler with
         member _.WarnOnlyOnce(msg, ?range) =
