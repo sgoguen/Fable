@@ -148,6 +148,7 @@ module File =
             | Fable.Python -> ".py"
             | Fable.Php -> ".php"
             | Fable.Dart -> ".dart"
+            | Fable.CSharp -> ".cs"
             | Fable.Rust -> ".rs"
             | Fable.JavaScript -> ".js"
 

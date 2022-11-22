@@ -683,6 +683,7 @@ module Helpers =
         match com.Options.Language with
         | Python | JavaScript | TypeScript -> memb.IsMutable && isNotPrivate memb
         | Rust | Php | Dart -> false
+        | CSharp -> false  //  TODO:  CSharp - Check this
 
     let isModuleValueForCalls com (declaringEntity: FSharpEntity) (memb: FSharpMemberOrFunctionOrValue) =
         declaringEntity.IsFSharpModule
