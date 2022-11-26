@@ -69,14 +69,17 @@ type ICSharpCompiler =
 
 module Util =
 
+    // CSTODO: ???
     let (|TransformType|) (com: ICSharpCompiler) ctx e =
         com.TransformType(ctx, e)
 
+    // CSTODO: Maybe we want to distinguish between instead of just matching a Function
     let (|Function|_|) = function
         | Fable.Lambda(arg, body, _) -> Some([arg], body)
         | Fable.Delegate(args, body, _, []) -> Some(args, body)
         | _ -> None
 
+    // CSTODO: Unifies the two types of bindings.  Does this makes sense for C#?
     let (|Lets|_|) = function
         | Fable.Let(ident, value, body) -> Some([ident, value], body)
         | Fable.LetRec(bindings, body) -> Some(bindings, body)

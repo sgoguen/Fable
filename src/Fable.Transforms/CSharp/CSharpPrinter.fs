@@ -20,6 +20,9 @@ module PrinterExtensions =
         member this.AddWarning(msg, ?range) =
             this.AddLog(msg, Severity.Warning , ?range=range)
 
+        /// Prints a list of expressions, separated by the given separator
+        /// and with the given indentation.
+        /// CSTODO:  Ensure this makes sense for C#
         member printer.PrintBlock(nodes: 'a list, printNode: Printer -> 'a -> unit, ?printSeparator: Printer -> unit, ?skipNewLineAtEnd) =
             let printSeparator = defaultArg printSeparator (fun _ -> ())
             let skipNewLineAtEnd = defaultArg skipNewLineAtEnd false
@@ -34,26 +37,33 @@ module PrinterExtensions =
             if not skipNewLineAtEnd then
                 printer.PrintNewLine()
 
+        /// Prints a list of statements with each statement separated by a ; new line.
         member printer.PrintBlock(nodes: Statement list, ?skipNewLineAtEnd) =
             printer.PrintBlock(nodes,
                                (fun p s -> p.PrintProductiveStatement(s)),
                                (fun p -> p.PrintStatementSeparator()),
                                ?skipNewLineAtEnd=skipNewLineAtEnd)
 
+        /// Prints the ; new line separator for statements.
         member printer.PrintStatementSeparator() =
             if printer.Column > 0 then
                 printer.Print(";")
                 printer.PrintNewLine()
 
+        /// CSTODO:  What is this for?
         member this.HasSideEffects(e: Expression) = // TODO
             match e with
             | _ -> true
 
+        /// A productive statement is one that has side effects.  For now, we assume
+        /// that all statements have side effects.
+        /// CSTODO:  What is this for?
         member this.IsProductiveStatement(s: Statement) =
             match s with
             | ExpressionStatement(expr) -> this.HasSideEffects(expr)
             | _ -> true
 
+        /// Prints a statement, but only if it has side effects.
         member printer.PrintProductiveStatement(s: Statement, ?printSeparator) =
             if printer.IsProductiveStatement(s) then
                 printer.Print(s)
@@ -74,6 +84,7 @@ module PrinterExtensions =
             // https://fable.io/docs/communicate/js-from-fable.html#Emit-when-F-is-not-enough
             let value =
                 value
+                // Regex: $(\d+)...
                 |> replace @"\$(\d+)\.\.\." (fun m ->
                     let rep = ResizeArray()
                     let i = int m.Groups[1].Value
@@ -81,12 +92,14 @@ module PrinterExtensions =
                         rep.Add("$" + string j)
                     String.concat ", " rep)
 
+                // . Regex: {{\s*\$(\d+)\s*?(.*?):(.*?)}}
                 |> replace @"\{\{\s*\$(\d+)\s*\?(.*?):(.*?)\}\}" (fun m ->
                     let i = int m.Groups[1].Value
                     match args[i] with
                     | Literal(BooleanLiteral(value=value)) when value -> m.Groups[2].Value
                     | _ -> m.Groups[3].Value)
 
+                // Regex: {{([^}]*$(\d+).*?)}}
                 |> replace @"\{\{([^\}]*\$(\d+).*?)\}\}" (fun m ->
                     let i = int m.Groups[2].Value
                     match List.tryItem i args with

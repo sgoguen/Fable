@@ -10,6 +10,7 @@ module Tags =
     let empty: string list = []
     let (|Contains|_|) (key: string) (tags: string list) = if List.contains key tags then Some () else None
 
+/// A reference to the original source file, assembly or precompiled library
 type EntityPath =
     | SourcePath of string
     | AssemblyPath of string
@@ -17,6 +18,7 @@ type EntityPath =
     | CoreAssemblyName of string
     | PrecompiledLib of sourcePath: string * assemblyPath: string
 
+/// A reference to an entity (Type, Method, Property, etc.) in a source file, assembly or precompiled library
 type EntityRef =
     { FullName: string
       Path: EntityPath }
@@ -31,23 +33,28 @@ type EntityRef =
         | PrecompiledLib(p,_) -> Some p
         | AssemblyPath _ | CoreAssemblyName _ -> None
 
+/// Member reference metadata
 type MemberRefInfo =
     { IsInstance: bool
       CompiledName: string
       NonCurriedArgTypes: Type list option }
 
+/// A reference to a member of an entity (Method, Property, etc.)
 type MemberRef =
     | MemberRef of declaringEntity: EntityRef * info: MemberRefInfo
     | GeneratedMemberRef of GeneratedMember
 
+/// A declared type is a type whose type parameters are known
 type DeclaredType =
     abstract Entity: EntityRef
     abstract GenericArgs: Type list
 
+/// An attribute annotates a type, method, property, etc.
 type Attribute =
     abstract Entity: EntityRef
     abstract ConstructorArgs: obj list
 
+/// A field is a member of a type
 type Field =
     abstract Name: string
     abstract FieldType: Type
@@ -55,12 +62,14 @@ type Field =
     abstract IsStatic: bool
     abstract LiteralValue: obj option
 
+/// A union case is a single case of a union type
 type UnionCase =
     abstract Name: string
     abstract FullName: string
     abstract CompiledName: string option
     abstract UnionCaseFields: Field list
 
+/// A type constraint used in a generic type definition
 [<RequireQualifiedAccess>]
 type Constraint =
     | HasMember of name: string * isStatic: bool
@@ -74,11 +83,13 @@ type Constraint =
     | IsUnmanaged
     | IsEnum
 
+/// A generic type parameter used when declaring a generic type
 type GenericParam =
     abstract Name: string
     abstract IsMeasure: bool
     abstract Constraints: Constraint list
 
+/// A parameter of a method or function
 type Parameter =
     abstract Attributes: Attribute seq
     abstract Name: string option
@@ -89,10 +100,12 @@ type Parameter =
     abstract IsOptional: bool
     abstract DefaultValue: Expr option
 
+/// The signature of a method or function in an interface or (abstract method)
 type AbstractSignature =
     abstract Name: string
     abstract DeclaringType: Type
 
+/// Metadata for a method, function, property, etc.
 type MemberFunctionOrValue =
     abstract DisplayName: string
     abstract CompiledName: string
@@ -122,6 +135,9 @@ type MemberFunctionOrValue =
     abstract ApparentEnclosingEntity: EntityRef option
     abstract ImplementedAbstractSignatures: AbstractSignature seq
 
+/// An entity is an object type (class, interface, struct, enum, union, etc.)
+/// or a function (method, function, property, etc.)
+/// or a module or a type alias
 type Entity =
     abstract Ref: EntityRef
     abstract DisplayName: string
@@ -153,12 +169,14 @@ type Entity =
     abstract IsByRef: bool
     abstract IsEnum: bool
 
+/// Numeric types can be regular, measure or enum
 [<RequireQualifiedAccess>]
 type NumberInfo =
     | Empty
     | IsMeasure of fullname: string
     | IsEnum of ent: EntityRef
 
+/// An F# type
 type Type =
     | Measure of fullname: string
     | MetaType
@@ -179,6 +197,7 @@ type Type =
     | DeclaredType of ref: EntityRef * genericArgs: Type list
     | AnonymousRecordType of fieldNames: string [] * genericArgs: Type list * isStruct: bool
 
+    /// Gets the generic type arguments of a declared type
     member this.Generics =
         match this with
         | Option(gen, _)
@@ -192,6 +211,7 @@ type Type =
         // TODO: Check numbers with measure?
         | MetaType | Any | Unit | Boolean | Char | String | Regex | Number _ | GenericParam _ | Measure _ -> []
 
+    /// Creates a new type by mapping the generic arguments to a new type
     member this.MapGenerics f =
         match this with
         | Option(gen, isStruct) -> Option(f gen, isStruct)
@@ -204,6 +224,7 @@ type Type =
         | AnonymousRecordType(e, gen, isStruct) -> AnonymousRecordType(e, List.map f gen, isStruct)
         | MetaType | Any | Unit | Boolean | Char | String | Regex | Number _ | GenericParam _ | Measure _ -> this
 
+/// What's the difference between generated member info and regular member info?
 type GeneratedMemberInfo =
     {
         Name: string
@@ -215,6 +236,7 @@ type GeneratedMemberInfo =
         DeclaringEntity: EntityRef option
     }
 
+/// Constructs generated memmbers
 type GeneratedMember =
     | GeneratedFunction of info: GeneratedMemberInfo
     | GeneratedValue of info: GeneratedMemberInfo
@@ -265,6 +287,7 @@ type GeneratedMember =
             DeclaringEntity = entRef
         } |> GeneratedSetter |> GeneratedMemberRef
 
+    /// Common method to get member info from generated members
     member this.Info =
         match this with
         | GeneratedFunction info -> info
@@ -272,6 +295,7 @@ type GeneratedMember =
         | GeneratedGetter info -> info
         | GeneratedSetter info -> info
 
+    /// Creates a parameter object
     static member Param(typ, ?name) =
         { new Parameter with
             member _.Attributes = []
@@ -283,6 +307,7 @@ type GeneratedMember =
             member _.IsOptional = false
             member _.DefaultValue = None }
 
+    // A generated member should provide metadata
     interface MemberFunctionOrValue with
         member this.DeclaringEntity = this.Info.DeclaringEntity
         member this.DisplayName = this.Info.Name
@@ -311,6 +336,8 @@ type GeneratedMember =
         member _.ApparentEnclosingEntity = None
         member _.ImplementedAbstractSignatures = []
 
+/// Object expressions let you define objects inline in an expression
+/// This represents a single member of an object expression
 type ObjectExprMember = {
     Name: string
     Args: Ident list
@@ -319,6 +346,7 @@ type ObjectExprMember = {
     IsMangled: bool
 }
 
+/// Represents a class member (field, method, property, etc)
 type MemberDecl = {
     Name: string
     Args: Ident list
@@ -331,6 +359,7 @@ type MemberDecl = {
     Tags: string list
 }
 
+/// Represents a class
 type ClassDecl = {
     Name: string
     Entity: EntityRef
@@ -341,22 +370,27 @@ type ClassDecl = {
     Tags: string list
 }
 
+/// An action is a top-level declaration: For example a single .fsx file
+/// that prints "Hello World" on one line.
 type ActionDecl = {
     Body: Expr
     UsedNames: Set<string>
 }
 
+/// Represents a module
 type ModuleDecl = {
     Name: string
     Entity: EntityRef
     Members: Declaration list
 }
 
+/// A declaration is a top-level entity. In F#, this can be a module, a class, a method (or property) or an action.
 and Declaration =
     | ModuleDeclaration of ModuleDecl
     | ActionDeclaration of ActionDecl
     | MemberDeclaration of MemberDecl
     | ClassDeclaration of ClassDecl
+    /// QUESTION: What are used names?
     member this.UsedNames =
         match this with
         | ModuleDeclaration d -> d.Members |> List.map (fun d -> d.UsedNames) |> Set.unionMany
@@ -369,10 +403,13 @@ and Declaration =
             |> fun usedNames -> usedNames, d.AttachedMembers
             ||> List.fold (fun acc m -> Set.union acc m.UsedNames)
 
+/// Represents a file, which is made up of top-level declarations
 type File(decls, ?usedRootNames) =
     member _.Declarations: Declaration list = decls
     member _.UsedNamesInRootScope: Set<string> = defaultArg usedRootNames Set.empty
 
+/// An identifier is a name that can be used to refer to a value (mutable or immutable)
+/// or an argument.
 type Ident =
     { Name: string
       Type: Type
@@ -385,16 +422,19 @@ type Ident =
         |> Option.bind (fun r -> r.identifierName)
         |> Option.defaultValue x.Name
 
+/// An array is a value kind, but there are three different ways to create an array
 type NewArrayKind =
     | ArrayValues of values: Expr list
     | ArrayAlloc of size: Expr
     | ArrayFrom of expr: Expr
 
+/// Arrays can be mutable, immutable or resizable (which is mutable)
 type ArrayKind =
     | ResizeArray
     | MutableArray
     | ImmutableArray
 
+/// ValueKinds represents the different kinds of values that can be created
 type ValueKind =
     // The AST from F# compiler is a bit inconsistent with ThisValue and BaseValue.
     // ThisValue only appears in constructors and not in instance members (where `this` is passed as first argument)
@@ -419,6 +459,7 @@ type ValueKind =
     | NewRecord of values: Expr list * ref: EntityRef * genArgs: Type list
     | NewAnonymousRecord of values: Expr list * fieldNames: string [] * genArgs: Type list * isStruct: bool
     | NewUnion of values: Expr list * tag: int * ref: EntityRef * genArgs: Type list
+    /// Calculates the type of the value kind
     member this.Type =
         match this with
         | ThisValue t
@@ -439,6 +480,7 @@ type ValueKind =
         | NewAnonymousRecord (_, fieldNames, genArgs, isStruct) -> AnonymousRecordType(fieldNames, genArgs, isStruct)
         | NewUnion (_, _, ent, genArgs) -> DeclaredType(ent, genArgs)
 
+/// Represents parameters passed to a function, method, constructor, emitter, etc.
 type CallInfo =
     { ThisArg: Expr option
       Args: Expr list
@@ -449,6 +491,7 @@ type CallInfo =
       GenericArgs: Type list
       MemberRef: MemberRef option
       Tags: string list }
+    /// Creates a CallInfo record from a list of arguments
     static member Create(
             ?thisArg: Expr,
             ?args: Expr list,
@@ -465,6 +508,7 @@ type CallInfo =
           MemberRef = memberRef
           Tags = match isCons with Some true -> "new"::tags | Some false | None -> tags }
 
+/// QUESTION: What's the purpose of this?
 type ReplaceCallInfo =
     { CompiledName: string
       OverloadSuffix: string
@@ -476,11 +520,13 @@ type ReplaceCallInfo =
       DeclaringEntityFullName: string
       GenericArgs: Type list }
 
+/// Used for Fable's macro system
 type EmitInfo =
     { Macro: string
       IsStatement: bool
       CallInfo: CallInfo }
 
+/// QUESTION: Does this represent a fable-compiler imported module?
 type LibraryImportInfo =
     { IsInstanceMember: bool
       IsModuleMember: bool }
@@ -488,6 +534,7 @@ type LibraryImportInfo =
         { IsInstanceMember = defaultArg isInstanceMember false
           IsModuleMember = defaultArg isModuleMember false }
 
+/// QUESTION: What do these specific cases represent?
 type ImportKind =
     /// `isInline` is automatically set to true after applying the arguments of an inline function whose body
     /// is a user generated import, to allow patterns like the one in "importDefault works with getters when inlined" test
@@ -496,20 +543,25 @@ type ImportKind =
     | MemberImport of memberRef: MemberRef
     | ClassImport of entRef: EntityRef
 
+/// Represents a reference to an imported module, member or class
 type ImportInfo =
     { Selector: string
       Path: string
       Kind: ImportKind }
+    /// Only non-inlined user imports are not compiler generated
+    /// QUESTION: What does this mean?
     member this.IsCompilerGenerated =
         match this.Kind with
         | UserImport isInline -> isInline
         | LibraryImport _ | MemberImport _  | ClassImport _ -> true
 
+/// We support unary, binary and logical operators (which always return a boolean)
 type OperationKind =
     | Unary of operator: UnaryOperator * operand: Expr
     | Binary of operator: BinaryOperator * left: Expr * right: Expr
     | Logical of operator: LogicalOperator * left: Expr * right: Expr
 
+/// The information we need for a field
 type FieldInfo =
     {
         Name: string
@@ -521,6 +573,7 @@ type FieldInfo =
     }
     member this.CanHaveSideEffects =
         this.IsMutable || this.MaybeCalculated
+    /// Creates a FieldInfo record from a name and a type
     static member Create(name, ?fieldType: Type, ?isMutable: bool, ?maybeCalculated: bool, ?tag: string) =
         { Name = name
           FieldType = fieldType
@@ -529,11 +582,13 @@ type FieldInfo =
           Tags = Option.toList tag }
         |> FieldGet
 
+/// Represents a single field in a single case of a union type
 type UnionFieldInfo =
     { Entity: EntityRef
       GenericArgs: Type list
       CaseIndex: int
       FieldIndex: int }
+    /// Creates a UnionFieldInfo record
     static member Create(entity, caseIndex, fieldIndex, ?genArgs) =
         { Entity = entity
           GenericArgs = defaultArg genArgs []
@@ -541,6 +596,7 @@ type UnionFieldInfo =
           FieldIndex = fieldIndex }
         |> UnionField
 
+/// Types of Get operations (get field, get tuple item, get option value, etc.)
 type GetKind =
     | TupleIndex of index: int
     | ExprGet of expr: Expr
@@ -552,11 +608,13 @@ type GetKind =
     // TODO: Add isForced flag to distinguish between value accessed in pattern matching or not
     | OptionValue
 
+/// Types of Set operations (set field, set tuple item, set mutable value)
 type SetKind =
     | ExprSet of expr: Expr
     | FieldSet of fieldName: string
     | ValueSet
 
+/// Types of testing operations (is a type, is option, has a list head, is union case)
 type TestKind =
     | TypeTest of typ: Type
     | OptionTest of isSome: bool
@@ -576,6 +634,7 @@ type ExtendedSet =
         | Curry (expr, _) -> expr.Type
         | Debugger -> Unit
 
+/// QUESTION: What's the purpose of this?  Is it used to assist with inlining?
 type Witness =
     { TraitName: string
       IsInstance: bool
@@ -642,7 +701,9 @@ type Expr =
     | TryCatch of body: Expr * catch: (Ident * Expr) option * finalizer: Expr option * range: SourceLocation option
     | IfThenElse of guardExpr: Expr * thenExpr: Expr * elseExpr: Expr * range: SourceLocation option
 
+    // QUESTION: What's an unresolved expression?
     | Unresolved of expr: UnresolvedExpr * typ: Type * range: SourceLocation option
+    // Extended set includes special Throw, Curry and debugger instructions
     | Extended of expr: ExtendedSet * range: SourceLocation option
 
     member this.Type =

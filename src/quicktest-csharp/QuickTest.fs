@@ -34,8 +34,13 @@ open Fable.Core
 
 // let compose f g = fun x -> f (g x)
 
-type Person(name:string) =
-    member this.Name = name
+// type IPerson =
+//     abstract Name: string
+//     abstract Age: int
+//     abstract HaveBirthday: unit -> IPerson
+
+// type Person() =
+//     member val Name = "" with get, set
 
 // let fold (f: 'A -> 'B -> 'A) (acc: 'A) (xs: 'B list): 'A =
 //     let rec loop acc xs =
@@ -44,7 +49,10 @@ type Person(name:string) =
 //         | x :: xs -> loop (f acc x) xs
 //     loop acc xs
 
-let add x y = x + y
+// let add x y = x + y
 
-let main(args: string[]) =
-    ()
+// let main(args: string[]) =
+//     ()
+
+let Hello() =
+    Console.WriteLine("Hello World!");
