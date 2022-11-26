@@ -227,7 +227,7 @@ module PrinterExtensions =
                 printer.Print(" ")
                 // Probably this won't work if we have multiple args
                 let argTypes = argTypes |> List.filter (function Void -> false | _ -> true)
-                printer.PrintList("Function(", ", ", ")", argTypes, printer.PrintType)
+                printer.PrintList("Func<", ", ", ">", argTypes, printer.PrintType)
 
         member printer.PrintWithParens(expr: Expression) =
             printer.Print("(")
@@ -296,7 +296,7 @@ module PrinterExtensions =
             | BinaryMinus -> printer.Print(" - ")
             | BinaryPlus -> printer.Print(" + ")
             | BinaryMultiply -> printer.Print(" * ")
-            | BinaryDivide -> printer.Print(if typ = Integer then " ~/ " else " / ")
+            | BinaryDivide -> printer.Print(" / ")
             | BinaryModulus -> printer.Print(" % ")
             | BinaryExponent -> printer.Print(" ** ")
             | BinaryOrBitwise -> printer.Print(" | ")
@@ -405,7 +405,7 @@ module PrinterExtensions =
                 printer.PrintBlock(body)
 
             | ForInStatement(param, iterable, body) ->
-                printer.Print("for (final " + param.Name + " in ")
+                printer.Print("for (var " + param.Name + " in ")
                 printer.PrintWithParensIfComplex(iterable)
                 printer.Print(") ")
                 printer.PrintBlock(body)
@@ -449,7 +449,7 @@ module PrinterExtensions =
             | ContinueStatement label ->
                 match label with
                 | None -> printer.Print("continue")
-                | Some label -> printer.Print("continue " + label)
+                | Some label -> printer.Print("goto " + label)
 
             | LabeledStatement(label, body) ->
                 printer.Print(label + ":")
@@ -845,7 +845,7 @@ module PrinterExtensions =
                 // Declare as late so Dart compiler doesn't complain var is not assigned
                 | None, _ -> printer.Print("late ")
                 match kind with
-                | Final -> printer.Print("final ")
+                | Final -> printer.Print("var ")
                 | _ -> ()
                 printer.PrintType(ident.Type)
                 printer.Print(" " + ident.Name)
@@ -861,8 +861,8 @@ module PrinterExtensions =
                     | _ -> false
 
                 match kind with
-                | Const -> printer.Print("const ")
-                | Final -> printer.Print("final ")
+                | Const -> printer.Print("var ")
+                | Final -> printer.Print("var ")
                 | Var when not printType -> printer.Print("var ")
                 | Var -> ()
 
@@ -915,8 +915,8 @@ let run (writer: Writer) (file: File): Async<unit> =
         |> List.iter (fun i ->
             let path = printer.MakeImportPath(i.Path)
             match i.LocalIdent with
-            | None -> printer.Print("import '" + path + "';")
-            | Some localId -> printer.Print("import '" + path + "' as " + localId + ";")
+            | None -> printer.Print("// using '" + path + "';")
+            | Some localId -> printer.Print("// import '" + path + "' as " + localId + ";")
             printer.PrintNewLine())
 
         printer.PrintNewLine()

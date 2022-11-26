@@ -32,10 +32,17 @@ open Fable.Core
 //     if success then
 //         print "[ERROR EXPECTED]"
 
-// let main() =
-//     testCase "Array.length works" <| fun () ->
-//         let xs = [|"a"; "a"; "a"; "a"|]
-//         Array.length xs |> equal 4
+// let compose f g = fun x -> f (g x)
+
+type Person(name:string) =
+    member this.Name = name
+
+// let fold (f: 'A -> 'B -> 'A) (acc: 'A) (xs: 'B list): 'A =
+//     let rec loop acc xs =
+//         match xs with
+//         | [] -> acc
+//         | x :: xs -> loop (f acc x) xs
+//     loop acc xs
 
 let add x y = x + y
 
