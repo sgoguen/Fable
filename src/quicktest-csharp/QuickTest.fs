@@ -49,10 +49,10 @@ open Fable.Core
 //         | x :: xs -> loop (f acc x) xs
 //     loop acc xs
 
-// let add x y = x + y
+let add x y = x + y
 
 // let main(args: string[]) =
 //     ()
 
-let Hello() =
-    Console.WriteLine("Hello World!");
+// let Hello() =
+//     Console.WriteLine("Hello World!");
