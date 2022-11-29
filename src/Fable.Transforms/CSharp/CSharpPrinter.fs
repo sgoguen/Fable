@@ -235,12 +235,18 @@ module PrinterExtensions =
             | TypeReference(ref, gen, _info) ->
                 printer.PrintIdent(ref)
                 printer.PrintList("<", ", ", ">", gen, printer.PrintType, skipIfEmpty=true)
+            // | Function(argTypes, returnType) ->
+            //     printer.PrintType(returnType)
+            //     printer.Print(" ")
+            //     // Probably this won't work if we have multiple args
+            //     let argTypes = argTypes |> List.filter (function Void -> false | _ -> true)
+            //     printer.PrintList("Func<", ", ", ">", argTypes, printer.PrintType)
             | Function(argTypes, returnType) ->
-                printer.PrintType(returnType)
-                printer.Print(" ")
-                // Probably this won't work if we have multiple args
                 let argTypes = argTypes |> List.filter (function Void -> false | _ -> true)
-                printer.PrintList("Func<", ", ", ">", argTypes, printer.PrintType)
+                match returnType, argTypes with
+                | Void, [] -> printer.Print("Action")
+                | Void, _ -> printer.PrintList("Action<", ", ", ">", argTypes, printer.PrintType)
+                | _, _ -> printer.PrintList("Func<", ", ", ">", [ yield! argTypes; yield returnType ], printer.PrintType)
 
         member printer.PrintWithParens(expr: Expression) =
             printer.Print("(")
@@ -341,9 +347,9 @@ module PrinterExtensions =
             | StringLiteral value ->
                 let escape str =
                     (Naming.escapeString (fun _ -> false) str).Replace(@"$", @"\$")
-                printer.Print("'")
+                printer.Print("\"")
                 printer.Print(escape value)
-                printer.Print("'")
+                printer.Print("\"")
             | IntegerLiteral value ->
                 printer.Print(value.ToString())
             | DoubleLiteral value ->
@@ -701,6 +707,7 @@ module PrinterExtensions =
             | AnonymousFunction(args, body, genArgs, _returnType) ->
                 printer.PrintList("<", genArgs, ">", skipIfEmpty=true)
                 printer.PrintIdentList("(", args, ")", printType=true)
+                printer.Print(" => ")
                 printer.PrintFunctionBody(body, isExpression=true)
 
         member printer.PrintClassDeclaration(decl: Class) =

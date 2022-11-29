@@ -773,7 +773,7 @@ match BUILD_ARGS_LOWER with
 | "watch-test-dart"::_ -> testDart(true)
 
 ///  **********  TESTING C# Compiler  ************
-| "quicktest-csharp"::_ ->
+| "endeavours"::_ ->
     // buildLibraryDartIfNotExists()
     watchFableWithArgs "src/quicktest-csharp" ["--lang csharp --watch --exclude Fable.Core --noCache"]
 ///  **********  TESTING C# Compiler  ************
