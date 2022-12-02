@@ -21,6 +21,7 @@ let (|CSharpDouble|_|) = function
     | Float32 | Float64 -> Some CSharpDouble
     | _ -> None
 
+/// Turns a function of n arity into a curried function???
 let curryExprAtRuntime (_com: Compiler) arity (expr: Expr) =
     // Let's use emit for simplicity
     let argIdents = List.init arity (fun i -> $"arg{i}$")
@@ -28,6 +29,7 @@ let curryExprAtRuntime (_com: Compiler) arity (expr: Expr) =
     $"""%s{args} $0(%s{String.concat ", " argIdents})"""
     |> emit None expr.Type [expr] false
 
+/// Turns an expression into a function of n arity (uncurried)???
 let uncurryExprAtRuntime (com: Compiler) t arity (expr: Expr) =
     let uncurry expr =
         let argIdents = List.init arity (fun i -> $"arg{i}$")
@@ -49,33 +51,40 @@ let uncurryExprAtRuntime (com: Compiler) t arity (expr: Expr) =
         Helper.LibCall(com, "Option", "map", t, [fn; expr])
     | expr -> uncurry expr
 
+///
 let partialApplyAtRuntime (_com: Compiler) t arity (fn: Expr) (argExprs: Expr list) =
+    // Create a list of arguments
     let argIdents = List.init arity (fun i -> $"arg{i}$")
+    // Generate a bunch of fat arrows
     let args = argIdents |> List.map (fun a -> $"({a}) =>") |> String.concat " "
+    // Generate a bunch of argument references named after the arguments
     let appliedArgs = List.init argExprs.Length (fun i -> $"${i + 1}") |> String.concat ", "
+    //  Use emit to insert bodies into the template when it's printed
     $"""%s{args} $0(%s{appliedArgs}, %s{String.concat ", " argIdents})"""
     |> emit None t (fn::argExprs) false
 
 let error msg =
     Helper.ConstructorCall(makeIdentExpr "Exception", Any, [msg])
 
+/// Maps Fable types to C# types
 let coreModFor = function
     | BclGuid -> "Guid"
-    | BclDateTime -> "Date"
+    | BclDateTime -> "DateTime"
     | BclDateTimeOffset -> "DateOffset"
-    | BclDateOnly -> "DateOnly"
+    | BclDateOnly -> "Date"
     | BclTimeOnly -> "TimeOnly"
     | BclTimer -> "Timer"
     | BclTimeSpan -> "TimeSpan"
     | FSharpSet _ -> "Set"
     | FSharpMap _ -> "Map"
-    | FSharpResult _ -> "Choice"
+    | FSharpResult _ -> "Result"
     | FSharpChoice _ -> "Choice"
     | FSharpReference _ -> "Types"
-    | BclHashSet _ -> "MutableSet"
-    | BclDictionary _ -> "MutableMap"
-    | BclKeyValuePair _ -> FableError "Cannot decide core module" |> raise
+    | BclHashSet _ -> "HashSet"
+    | BclDictionary _ -> "Dictionary"
+    | BclKeyValuePair _ -> "KeyValuePair"
 
+/// QUESTION: What is this for?  Truncating a long to a 32-bit int?
 let makeLongInt com r t signed (x: uint64) =
     let lowBits = NumberConstant (float (uint32 x), Float64, NumberInfo.Empty)
     let highBits = NumberConstant (float (x >>> 32), Float64, NumberInfo.Empty)
@@ -83,6 +92,8 @@ let makeLongInt com r t signed (x: uint64) =
     let args = [makeValue None lowBits; makeValue None highBits; makeValue None unsigned]
     Helper.LibCall(com, "Long", "fromBits", t, args, ?loc=r)
 
+
+/// QUESTION: What is this for?
 let makeDecimal com r t (x: decimal) =
     let str = x.ToString(System.Globalization.CultureInfo.InvariantCulture)
     Helper.LibCall(com, "Decimal", "default", t, [makeStrConst str], isConstructor=true, ?loc=r)
@@ -94,7 +105,8 @@ let makeDecimalFromExpr com r t (e: Expr) =
 let toChar (arg: Expr) =
     match arg.Type with
     // TODO: Check length
-    | String -> Helper.InstanceCall(arg, "codeUnitAt", Char, [makeIntConst 0])
+    //  Use C# get_Chars indexer
+    | String -> Helper.InstanceCall(arg, "get_Chars", Char, [makeIntConst 0])
     | Char -> arg
     | _ -> TypeCast(arg, Char)
 
@@ -119,25 +131,26 @@ let toString com (ctx: Context) r (args: Expr list) =
 //        | Number((Int64|UInt64),_) -> Helper.LibCall(com, "Long", "toString", String, args)
 //        | Number(BigInt,_) -> Helper.LibCall(com, "BigInt", "toString", String, args)
 //        | Number(Decimal,_) -> Helper.LibCall(com, "Decimal", "toString", String, args)
-        | _ -> Helper.InstanceCall(head, "toString", String, tail)
+        | _ -> Helper.InstanceCall(head, "ToString", String, tail)
 
 let getParseParams (kind: NumberKind) =
     let isFloatOrDecimal, numberModule, unsigned, bitsize =
         match kind with
-        | Int8 -> false, "Int32", false, 8
-        | UInt8 -> false, "Int32", true, 8
-        | Int16 -> false, "Int32", false, 16
-        | UInt16 -> false, "Int32", true, 16
+        | Int8 -> false, "SByte", false, 8
+        | UInt8 -> false, "Byte", true, 8
+        | Int16 -> false, "Int16", false, 16
+        | UInt16 -> false, "UInt16", true, 16
         | Int32 -> false, "Int32", false, 32
         | UInt32 -> false, "Int32", true, 32
-        | Int64 -> false, "Long", false, 64
-        | UInt64 -> false, "Long", true, 64
-        | Float32 -> true, "Double", false, 32
+        | Int64 -> false, "Int64", false, 64
+        | UInt64 -> false, "UInt64", true, 64
+        | Float32 -> true, "Single", false, 32
         | Float64 -> true, "Double", false, 64
         | Decimal -> true, "Decimal", false, 128
         | x -> FableError $"Unexpected kind in getParseParams: %A{x}" |> raise
     isFloatOrDecimal, numberModule, unsigned, bitsize
 
+//  TODO: We shouldn't need this for C# - Let's delete it when references are 0
 let castBigIntMethod typeTo =
     match typeTo with
     | Number(kind,_) ->
@@ -156,6 +169,7 @@ let castBigIntMethod typeTo =
         | BigInt | NativeInt | UNativeInt -> FableError $"Unexpected BigInt/%A{kind} conversion" |> raise
     | _ -> FableError $"Unexpected non-number type %A{typeTo}" |> raise
 
+// Creates a compariable way to determine if we can convert with no issue
 let kindIndex t =           //         0   1   2   3   4   5   6   7   8   9  10  11
     match t with            //         i8 i16 i32 i64  u8 u16 u32 u64 f32 f64 dec big
     | Int8 -> 0    //  0 i8   -   -   -   -   +   +   +   +   -   -   -   +
@@ -172,15 +186,18 @@ let kindIndex t =           //         0   1   2   3   4   5   6   7   8   9  10
     | BigInt -> 11          // 11 big  +   +   +   +   +   +   +   +   +   +   +   -
     | NativeInt | UNativeInt -> FableError "Casting to/from (u)nativeint is unsupported" |> raise
 
+/// A function that tells us if we can convert between one number kind to another without loss of precision
 let needToCast typeFrom typeTo =
     let v = kindIndex typeFrom // argument type (vertical)
     let h = kindIndex typeTo   // return type (horizontal)
     ((v > h) || (v < 4 && h > 3)) && (h < 8) || (h <> v && (h = 11 || v = 11))
 
+/// QUESTION:  Do we really need this?  I think we can just use the normal cast method
 let stringToDouble (_com: ICompiler) (_ctx: Context) r targetType (args: Expr list): Expr =
-    Helper.GlobalCall("double", targetType, args, memb="parse", ?loc=r)
+    Helper.GlobalCall("Double", targetType, args, memb="Parse", ?loc=r)
 
 /// Conversions to floating point
+/// QUESTION:  Again...  Do we really need this???
 let toFloat com (ctx: Context) r targetType (args: Expr list): Expr =
     let arg = args.Head
     match arg.Type with
@@ -196,6 +213,7 @@ let toFloat com (ctx: Context) r targetType (args: Expr list): Expr =
         addWarning com ctx.InlinePath r "Cannot make conversion because source type is unknown"
         TypeCast(arg, targetType)
 
+/// QUESTION:  Again...  Do we really need this???
 let toDecimal com (ctx: Context) r targetType (args: Expr list): Expr =
     match args.Head.Type with
     | Char -> makeDecimalFromExpr com r targetType args.Head
@@ -215,7 +233,7 @@ let fastIntFloor expr =
     makeUnOp None Int32.Number inner UnaryNotBitwise
 
 let stringToInt (_com: ICompiler) (_ctx: Context) r targetType (args: Expr list): Expr =
-    Helper.GlobalCall("int", targetType, args, memb="parse", ?loc=r)
+    Helper.GlobalCall("Int32", targetType, args, memb="Parse", ?loc=r)
 //    let kind =
 //        match targetType with
 //        | Number(kind,_) -> kind
@@ -259,15 +277,15 @@ let round com (args: Expr list) =
     match args.Head.Type with
     | Number(Decimal,_) ->
         let n = Helper.LibCall(com, "Decimal", "toNumber", Number(Float64, NumberInfo.Empty), [args.Head])
-        let rounded = Helper.LibCall(com, "Util", "round", Number(Float64, NumberInfo.Empty), [n])
+        let rounded = Helper.LibCall(com, "Decimal", "Round", Number(Float64, NumberInfo.Empty), [n])
         rounded::args.Tail
     | Number((Float32|Float64),_) ->
-        let rounded = Helper.LibCall(com, "Util", "round", Number(Float64, NumberInfo.Empty), [args.Head])
+        let rounded = Helper.LibCall(com, "Double", "Round", Number(Float64, NumberInfo.Empty), [args.Head])
         rounded::args.Tail
     | _ -> args
 
 let toList com returnType expr =
-    Helper.LibCall(com, "List", "ofSeq", returnType, [expr])
+    Helper.LibCall(com, "Enumerable", "ToList", returnType, [expr])
 
 let stringToCharArray e =
     let t = Array(Char, ImmutableArray)
@@ -595,14 +613,14 @@ let tryReplacedEntityRef (com: Compiler) entFullName =
     | Types.ienumerable | Types.ienumerableGeneric
     | Types.icollection | Types.icollectionGeneric
     | Naming.EndsWith "Collection" _
-        -> makeIdentExpr "Iterable" |> Some
+        -> makeIdentExpr "IEnumerable" |> Some
     | Types.ienumerator | Types.ienumeratorGeneric
 //    | "System.Collections.Generic.HashSet`1.Enumerator"
 //    | "System.Collections.Generic.Dictionary`2.Enumerator"
 //    | "System.Collections.Generic.Dictionary`2.KeyCollection.Enumerator"
 //    | "System.Collections.Generic.Dictionary`2.ValueCollection.Enumerator"
     | Naming.EndsWith "Enumerator" _
-        -> makeIdentExpr "Iterator" |> Some
+        -> makeIdentExpr "IEnumerator" |> Some
     | Types.icomparable | Types.icomparableGeneric -> makeIdentExpr "Comparable" |> Some
     | Types.idisposable | Types.adder | Types.averager | Types.icomparerGeneric | Types.iequalityComparerGeneric ->
         let entFullName = entFullName[entFullName.LastIndexOf(".") + 1..]
@@ -2891,6 +2909,7 @@ let tryCall (com: ICompiler) (ctx: Context) r t (info: CallInfo) (thisArg: Expr 
         if isFSharpType
         then fsharpType com methName r t info args
         else fsharpValue com methName r t info args
+    //  TODO:  How do we reflect UnionCaseInfo???
     | "Microsoft.FSharp.Reflection.UnionCaseInfo"
     | "System.Reflection.PropertyInfo"
     | "System.Reflection.ParameterInfo"

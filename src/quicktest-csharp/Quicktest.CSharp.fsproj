@@ -5,6 +5,7 @@
     <RollForward>Major</RollForward>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="Classes.fs" />
     <Compile Include="QuickTest.fs" />
     <Content Include="QuickTest.fs.csharp" />
     <Content Include="analysis_options.yaml" />

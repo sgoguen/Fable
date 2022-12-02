@@ -1,4 +1,18 @@
-# Fable: F# |> JS
+# Fable: F# |> JS ---  The C# Fork!!!
+
+# Getting Started Compiling F# to C#
+
+1. Clone this repository
+2. Make sure you have everything installed
+3. Run this script:
+
+```bash
+./build.sh quicktest-csharp
+```
+
+You will then want to look in the src/quicktest-csharp directory for the compiled C# code.
+
+# Getting Started Compiling F# to JavaScript
 
 [![Nuget](https://img.shields.io/nuget/v/Fable.svg?maxAge=0&colorB=brightgreen)](https://www.nuget.org/packages/Fable) [![Build](https://github.com/fable-compiler/Fable/actions/workflows/build.yml/badge.svg)](https://github.com/fable-compiler/Fable/actions/workflows/build.yml) [![Join the chat at https://gitter.im/fable-compiler/Fable](https://badges.gitter.im/fable-compiler/Fable.svg)](https://gitter.im/fable-compiler/Fable?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge)
 

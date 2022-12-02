@@ -739,7 +739,7 @@ module PrinterExtensions =
                 match m with
                 | Choice1Of3 v ->
                     if v.IsOverride then
-                        p.Print("@override")
+                        // p.Print("@override") <--  TODO: C# uses the override keyword
                         p.PrintNewLine()
                     p.PrintVariableDeclaration(v.Ident, v.Kind, ?value=v.Value, isLate=v.IsLate)
                     p.Print(";")
@@ -748,13 +748,13 @@ module PrinterExtensions =
                 | Choice2Of3 c ->
                     if c.IsConst then
                         p.Print("const ")
-                    if c.IsFactory then
+                    if c.IsFactory then  // TODO: C# doesn't support factory constructors
                         p.Print("factory ")
                     p.Print(decl.Name)
                     printer.PrintFunctionArgs(c.Args)
 
                     if callSuper then
-                        p.Print(": super")
+                        p.Print(": base")  // CHANGED: C# uses base
                         let hasUnnamedArgs = c.SuperArgs |> List.exists (function (name, _) -> Option.isNone name)
                         printer.PrintList("(", ")", c.SuperArgs, printer.PrintCallArgAndSeparator hasUnnamedArgs)
                     match c.Body with
@@ -764,7 +764,7 @@ module PrinterExtensions =
                         p.PrintBlock(body)
                 | Choice3Of3 m ->
                     if m.IsOverride then
-                        p.Print("@override")
+                        p.Print("@override")  // TODO: C# uses the override keyword
                         p.PrintNewLine()
 
                     match m.Kind with
@@ -816,6 +816,7 @@ module PrinterExtensions =
                 else
                     ()
 
+                //  TODO: C# only supports constructor arguments like this when declaring a record
                 if arg.IsConsThisArg then
                     printer.Print("this." + arg.Ident.Name)
                 else
@@ -849,48 +850,51 @@ module PrinterExtensions =
             printer.PrintFunctionBody(?body=body, ?isModuleOrClassMember=isModuleOrClassMember)
 
         member printer.PrintVariableDeclaration(ident: Ident, kind: VariableDeclarationKind, ?value: Expression, ?isLate) =
+            // Determine if we actually have an expression or not.
             let value =
                 match value with
                 | None -> None
                 // Dart recommends not to explicitly initialize mutable variables to null
-                | Some(Literal(NullLiteral _)) when kind = Var -> None
+                // But let's remove this for C#
+                // | Some(Literal(NullLiteral _)) when kind = Var -> None
                 | Some v -> Some v
 
             match value with
-            | None ->
-                match isLate, ident.Type with
-                | Some false, _
-                | None, Nullable _ -> ()
-                | Some true, _
-                // Declare as late so Dart compiler doesn't complain var is not assigned
-                | None, _ -> printer.Print("late ")
-                match kind with
-                | Final -> printer.Print("var ")
-                | _ -> ()
+            | None -> //  We're not initializing the variable, so let's just define it
+                      //  with the type name
+                // match isLate, ident.Type with
+                // | Some false, _
+                // | None, Nullable _ -> ()
+                // | Some true, _
+                // // Declare as late so Dart compiler doesn't complain var is not assigned
+                // | None, _ -> printer.Print("late ")
+                // match kind with
+                // | Final -> printer.Print("var ")
+                // | _ -> ()
                 printer.PrintType(ident.Type)
                 printer.Print(" " + ident.Name)
 
-            | Some value ->
-                let printType =
-                    // Nullable types and unions usually need to be typed explicitly
-                    // Print type also if ident and expression types are different?
-                    // (this usually happens when removing unnecessary casts)
-                    match ident.Type with
-                    | Nullable _ -> true
-                    | TypeReference(_, _, info) -> info.IsUnion
-                    | _ -> false
+            | Some value ->  //  We have an expression, so let's initialize the variable
+                // let printType =
+                //     // Nullable types and unions usually need to be typed explicitly
+                //     // Print type also if ident and expression types are different?
+                //     // (this usually happens when removing unnecessary casts)
+                //     match ident.Type with
+                //     | Nullable _ -> true
+                //     | TypeReference(_, _, info) -> info.IsUnion
+                //     | _ -> false
 
-                match kind with
-                | Const -> printer.Print("var ")
-                | Final -> printer.Print("var ")
-                | Var when not printType -> printer.Print("var ")
-                | Var -> ()
+                // match kind with
+                // | Const -> printer.Print("var ")
+                // | Final -> printer.Print("var ")
+                // | Var when not printType -> printer.Print("var ")
+                // | Var -> ()
 
-                if printType then
-                    printer.PrintType(ident.Type)
-                    printer.Print(" ")
-
-                printer.Print(ident.Name + " = ")
+                // if printType then
+                //     printer.PrintType(ident.Type)
+                //     printer.Print(" ")
+                printer.PrintType(ident.Type)
+                printer.Print(" " + ident.Name + " = ")
                 printer.Print(value)
 
 open PrinterExtensions

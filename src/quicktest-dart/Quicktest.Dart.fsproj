@@ -5,6 +5,8 @@
     <RollForward>Major</RollForward>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="LearnInYMinutes.fs" />
+    <Compile Include="MyTests.fs" />
     <Compile Include="QuickTest.fs" />
     <Content Include="QuickTest.fs.dart" />
     <Content Include="analysis_options.yaml" />

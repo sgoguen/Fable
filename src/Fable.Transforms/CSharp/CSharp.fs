@@ -1,4 +1,4 @@
-// Loosely based on https://pub.dev/documentation/analyzer/latest/dart_ast_ast/dart_ast_ast-library.html
+//  Forked from the Dart AST
 module rec Fable.AST.CSharp
 
 type UpdateOperator =
